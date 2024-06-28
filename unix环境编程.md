@@ -1,0 +1,186 @@
+# UNIX环境编程
+
+## 第3章 文件I/O
+
+> 常用的5种I/O函数：open、read、write、lseek和close。
+
+### 3.1 文件描述符
+
+> include <unistd.h>
+
+文件描述符：一个非负整数。  **0 ~ OPEN_MAX-1**
+
+创建时机：打开一个现有文件或新建文件时，内核会向进程返回一个文件描述符。
+
+三种标准输入、标准输出以及标准错误：**STDIN_FILENO（0）、STDOUT_FILENO（1）、STDERR_FIFENO（2）**
+
+
+
+### 3.3 文件I/O相关的各种函数
+
+#### 3.3.1 open和openat
+
+
+
+#### 3.3.2 creat
+
+#### 3.3.3 close
+
+#### 3.3.4 lseek
+
+
+
+
+
+
+
+## 第7章 进程环境
+
+### 7.1 进程终止
+
+#### 7.1.1 正常终止（5种）
+
+1. 从main返回
+2. 调用exit函数
+3. 调用_exit函数或\_Exit
+4. 最后一个线程从启动例程返回（11.5节）
+5. 从最后一个线程调用pthread_exit（11.5节）
+
+#### 7.1.2 异常终止（3种）
+
+1. 调用abort
+2. 接到一个信号
+3. 最后一个线程对取消请求做出响应（11.5节和12.7节）
+
+#### 7.1.3 退出函数
+
+```c
+#include <stdlib.h>
+// 这两个终止一个程序，都会立即进入内核
+void exit(int status);
+void _Exit(int status);
+
+#include <unistd.h>
+// 先执行一些清理操作，然后返回进入内核
+void _exit(int status);
+```
+
+status: 终止状态（退出状态）
+
+> 若main函数终止时没有显示使用return语句或调用exit函数，则进程的终止状态是未定义的。
+>
+> ​     exit(0) 等价于 return (0)   // main函数返回一个整型值与该值调用exit是等价的。
+
+
+
+**进程终止状态为未定义：**
+
+1. main执行了一个不带返回值的return语句
+2. main的返回值类型不为int
+3. 调用3个退出函数不带终止状态
+
+
+
+#### 7.1.4 atexit登记终止处理程序函数
+
+一个进程可以登记至多32个函数（终止处理程序），这些函数被exit()自动调用，由atexit()来登记这些函数。(调用的顺序与登记顺序相反)
+
+```c
+int atexit(void (*func)(void));
+```
+
+```c
+static void my_exit1(void){
+    printf("first exit handler\n");
+}
+
+static void my_exit2(void){
+    printf("second exit handler\n");
+}
+
+static void my_exit2(void);
+
+int main(void){
+  if(atexit(my_exit2) != 0)
+  	err_sys("can't register my_exit2");
+  	
+  if(atexit(my_exit1) != 0)
+  	err_sys("can't register my_exit1");
+    
+  if(atexit(my_exit1) != 0)
+  	err_sys("can't register my_exit1");
+    
+  printf("main is done\n");
+  return 0;
+}
+
+// main is done
+// first exit handler  每登记一次就会被执行一次
+// first exit handler
+// second exit handler
+```
+
+![image-20240429234715800](.assets/image-20240429234715800.png)
+
+exit首先会调用所有终止处理程序，然后通过fclose关闭所有打开流。
+
+> 进程自愿终止的唯一方法：
+>
+> - 显示调用_exit或\_Exit。
+> - 通过exit隐式调用_exit或\_Exit
+>
+> 
+>
+> 进程非自愿终止：由一个信号来终止
+
+
+
+
+
+
+
+## 第8章 进程控制
+
+### 8.1 进程标识
+
+​		每个进程ID是一个非负整数的唯一ID。
+
+> pid = 0: 调度进程（交换进程），是内核的一部分，但它不执行任何磁盘上的程序。   系统进程
+>
+> pid = 1: init进程（决不终止）   负责在自举内核后启动一个UNIX系统。  用户进程                 
+>
+> pid = 2：守护进程  负责支持虚拟存储器系统的分页操作
+
+### 8.2 获取进程有关ID的函数
+
+```c
+pid_t getpid(void);    // 进程ID
+pid_t getppid(void);   // 父进程ID
+ 
+uid_t getuid(void);    // 进程实际用户ID
+uid_t geteuid(void);   // 进程有效用户ID
+
+gid_t getgid(void);    // 进程实际组ID
+gid_t getegid(void);   // 进程有效组ID
+```
+
+
+
+### 8.3 进程常用函数
+
+```c
+pid_t fork(void);
+```
+
+#### 8.3.1 fork
+
+fork调用一次，返回两次。
+
+- 子进程返回0
+- 父进程返回新建子进程的进程ID
+
+
+
+
+
+桥接模式：ipv4设置为192.168.10.11
