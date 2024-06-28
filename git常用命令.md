@@ -47,7 +47,7 @@
 | git commit --amend -m "提交信息注释"            | 使用一次新的commit。替代上一次提交。如果代码没有变化，则修改为当前的提交注释 |
 | git commit --amend \[file1][file2]...           | **重做上一次commit**，并包括指定文件的新变化                 |
 
-
+> 若使用了VPN，需要执行 git remote set-url origin ”仓库名“
 
 ## 5. 操作分支
 
