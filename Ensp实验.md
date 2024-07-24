@@ -150,7 +150,7 @@ VID  Type    Ports
 VID  Status  Property      MAC-LRN Statistics Description      
 --------------------------------------------------------------------------------
 10   enable  default       enable  disable    VLAN 0010                         
-[Huawei-GigabitEthernet0/0/2]port default vlan 10
+[Huawei-GigabitEthernet0/0/2]port defa ult vlan 10
 [Huawei-GigabitEthernet0/0/2]display vlan 10
 --------------------------------------------------------------------------------
 U: Up;         D: Down;         TG: Tagged;         UT: Untagged;
@@ -460,3 +460,71 @@ Destination/Mask    Proto   Pre  Cost      Flags NextHop         Interface
 255.255.255.255/32  Direct  0    0           D   127.0.0.1       InLoopBack0
 ```
 
+
+
+
+
+
+
+## NAT地址转换
+
+### 静态NAT配置
+
+<img src="./Ensp%E5%AE%9E%E9%AA%8C.assets/image-20240715230209001.png" alt="image-20240715230209001" style="zoom: 67%;" />
+
+```
+[RTA]display nat static
+```
+
+<img src="./Ensp%E5%AE%9E%E9%AA%8C.assets/image-20240715230513670.png" alt="image-20240715230513670" style="zoom:67%;" />
+
+
+
+
+
+### 动态NAT配置
+
+<img src="./Ensp%E5%AE%9E%E9%AA%8C.assets/image-20240715230641887.png" alt="image-20240715230641887" style="zoom: 67%;" />
+
+```
+not-pat:只针对ip地址的转换，不对端口转换。
+```
+
+<img src="./Ensp%E5%AE%9E%E9%AA%8C.assets/image-20240715230947981.png" alt="image-20240715230947981" style="zoom:67%;" />
+
+
+
+#### Easy IP配置
+
+使用出接口上网，在出接口上调用`nat outbound 2000`，出接口的公网地址无论如何怎么变，都不影响上网，使用的是出接口的IP地址。
+
+<img src="./Ensp%E5%AE%9E%E9%AA%8C.assets/image-20240715232151199.png" alt="image-20240715232151199" style="zoom: 67%;" />
+
+<img src="./Ensp%E5%AE%9E%E9%AA%8C.assets/image-20240715232254199.png" alt="image-20240715232254199" style="zoom:67%;" />
+
+
+
+
+
+### NAT Server配置
+
+<img src="./Ensp%E5%AE%9E%E9%AA%8C.assets/image-20240715232437568.png" alt="image-20240715232437568" style="zoom:67%;" />
+
+<img src="./Ensp%E5%AE%9E%E9%AA%8C.assets/image-20240715232546563.png" alt="image-20240715232546563" style="zoom:67%;" />
+
+```
+[AR1]acl 2000
+[AR1-acl-basic-2000]rule 1 permit source 192.168.1.0 0.0.0.255
+[AR1-acl-basic-2000]q
+[AR1]nat address-group 0 100.1.1.123 100.1.1.125
+[AR1]int g0/0/1
+[AR1-GigabitEthernet0/0/1]nat outbound 2000 address-group 0
+```
+
+<img src="./Ensp%E5%AE%9E%E9%AA%8C.assets/image-20240717222539104.png" alt="image-20240717222539104" style="zoom:50%;" />
+
+
+
+VPN：虚拟私网，通过VPN穿透公网，实现两个私网之间的访问。
+
+NAT：将私网和公网进行了隔离。
