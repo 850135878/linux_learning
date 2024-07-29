@@ -103,3 +103,54 @@
 | git branch --set-upstream-to=origin/\<branch-name> | 设置本地分支以跟踪远程分支（这样就不必在推送或拉取时指定远程分支名） |
 | git branch -u origin/\<branch-name>                | 等价上面                                                     |
 
+
+
+
+
+## 踩坑
+
+### 1.执行git pull origin main报错
+
+```txt
+error: Your local changes to the following files would be overwritten by merge:
+  59学习网_TCP_IP路由技术(卷二)(第二版).pdf 路由协议.assets/image-20240729145945021.png 路由协议.assets/image-20240729154138487.png 路由协议.assets/image-20240729154625481.png 路由协议.assets/image-20240729161946294.png 路由协议.assets/image-20240729171512117.png 路由协议.assets/image-20240729174433608.png 路由协议.assets/image-20240729174515720.png 路由协议.assets/image-20240729174551463.png 路由协议.md
+```
+
+[分析]：这个错误信息表明，你尝试合并（merge）或拉取（pull）远程仓库的更改时，本地仓库中存在一些未提交的更改，这些更改与远程仓库中即将合并的更改冲突。特别是，你本地的`59学习网_TCP_IP路由技术(卷二)(第二版).pdf` 文件和 `路由协议.md` 文件以及多个图片文件有未提交的更改，这些文件在远程仓库中也可能有更新。
+
+【解决】:
+
+1. **提交你的本地更改**：如果你确定你的本地更改是需要的，并且它们不会与远程仓库中的更改冲突（或者你愿意覆盖远程仓库中的更改），你可以先将你的更改提交到本地仓库，然后尝试再次合并或拉取。
+
+   ```cmd
+   git add .  
+   git commit -m "描述你的更改"  
+   git pull  # 或者 git merge <分支名> 如果你正在合并特定的分支
+   ```
+
+   注意：如果你和团队成员共享这个仓库，最好在提交之前与他们沟通，以确保更改不会相互冲突。
+
+2. **暂存（Stash）你的更改**：如果你不确定是否要保留这些更改，或者你想要先查看远程仓库的更改，你可以使用`git stash`命令将你的更改暂存起来，然后拉取或合并远程仓库的更改。之后，你可以使用`git stash pop`来恢复你的更改。
+
+   ```
+   git stash  
+   git pull  # 或者 git merge <分支名>  
+   git stash pop
+   ```
+
+   如果拉取或合并后的更改与你的暂存更改冲突，你可能需要手动解决这些冲突。
+
+3. **放弃你的本地更改**：如果你决定放弃这些本地更改，并接受远程仓库的更改，你可以使用`git checkout -- <文件>`命令来撤销单个文件的更改，或者使用`git reset --hard`（但请谨慎使用，因为这会丢弃所有未提交的更改）来撤销所有更改。
+
+   ```cmd
+   git checkout -- 路由协议.md  
+   git checkout -- 路由协议.assets/image-20240729*.png  
+   git pull  # 或者 git merge <分支名>
+   
+   # 或者，如果你确定要丢弃所有更改：
+   git reset --hard  
+   git pull  # 或者 git merge <分支名>
+   ```
+
+   
+
