@@ -18,7 +18,7 @@ tcpdump是一个用于截取网络分组，并输出分组内容的工具。
 
 > 直接启动tcpdump，将监听的是第一个网络接口上所有流过的数据包。
 
-![image-20240730160338084](C:\Users\huang\AppData\Roaming\Typora\typora-user-images\image-20240730160338084.png)
+![image-20240731112537807](./tcpdump网络抓包工具.assets/image-20240731112537807.png)
 
 ### 2.1 参数选项
 
@@ -49,7 +49,7 @@ tcpdump是一个用于截取网络分组，并输出分组内容的工具。
 tcpdump -i ens33 [src|dst] host 192.168.168.1 -c 20
 ```
 
-![image-20240730160851782](C:\Users\huang\AppData\Roaming\Typora\typora-user-images\image-20240730160851782.png)
+![image-20240731112557517](./tcpdump网络抓包工具.assets/image-20240731112557517.png)
 
 - 根据【源/目的】端口来抓包
 
@@ -96,7 +96,7 @@ tcpdump -nn -i ens33 icmp or arp
 
 ## 3. 对输出结果分析
 
-![image-20240730160851782](C:\Users\huang\AppData\Roaming\Typora\typora-user-images\image-20240730160851782.png)
+![image-20240731112610237](./tcpdump网络抓包工具.assets/image-20240731112610237.png)
 
 > 第一列：时分秒毫秒 
 >
