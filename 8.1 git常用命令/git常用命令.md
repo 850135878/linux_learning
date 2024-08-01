@@ -663,7 +663,7 @@ git push
 
 
 
-**[题目1]**
+#### **[题目1]** **推送主分支 **
 
 这个关卡的 [Boss](https://so.csdn.net/so/search?q=Boss&spm=1001.2101.3001.7020) 很厉害 —— 以下是通关提示：
 
@@ -674,7 +674,8 @@ git push
 ```cmd
 # 拉取远程仓库的版本到本地
 git fetch       
-git rebase side1 side2     # rebase to o/main from side1
+git rebase o/main side1    # rebase to o/main from side1 将side11合并到origin/main分支
+git rebase side1 side2     
 git rebase side2 side3
 git rebase side3 main
 git push
@@ -682,7 +683,9 @@ git push
 
 
 
-**[题目2]**
+#### **[题目2]** 合并远程仓库
+
+- Rebase缺点:  修改了提交树的历史
 
 解决上一关卡的问题，但要用merge替换rebase。
 
@@ -690,7 +693,7 @@ git push
 
 ```cmd
 git checkout main
-git pull          //C8拿回本地，并且origin/main指向它，main也指向它！
+git pull         # C8拿回本地，并且origin/main指向它，main也指向它！
 git merge side1
 git merge side2
 git merge side3
@@ -699,42 +702,61 @@ git push
 
 
 
-#### 【题目三】追踪远程分支
+#### [题目3] 追踪远程分支
+
+> 本地main分支会追踪远程origin/main分支，也可自定义设置分支追钟origin/main。
 
 > ​	在前几节课程中有件事儿挺神奇的，Git 好像知道main与o/main 是相关的。当然这些分支的名字是相似的，可能会让你觉得是依此将远程分支main 和本地的main 分支进行了关联。这种关联在以下两种情况下可以清楚地得到展示：
 >
 > - pull 操作时, 提交记录会被 <font color='red'>先下载到o/main</font> 上，之后<font color='red'>再合并到本地的 main 分支</font>。隐含的合并目标由这个关联确定的。
 > - push 操作时, 我们把工作从 <font color='red'>main</font> 推到<font color='red'>远程仓库中的 main 分支</font>(同时会<font color='red'>更新远程分支 o/main</font>) 。这个推送的目的地也是由这种关联确定的！
 >
-> ​        main和 o/main 的关联关系就是**由分支的“remote tracking”属性**决定的。main被设定为跟踪 o/main这意味着为main分支指定了推送的目的地以及拉取后合并的目标。当你克隆仓库的时候, Git 就自动帮你把这个属性设置好了。
+> ​        main和 o/main 的关联关系就是<font color='red'>**由分支的“remote tracking”属性**</font>决定的。main被设定为跟踪 o/main这意味着为main分支指定了推送的目的地以及拉取后合并的目标。当你克隆仓库的时候, Git 就自动帮你把这个属性设置好了。
 >
-> ​	当你克隆时, Git 会为远程仓库中的每个分支在本地仓库中创建一个远程分支（比如 o/main）。然后再创建一个跟踪远程仓库中活动分支的本地分支，默认情况下这个本地分支会被命名为 main。
+> ​	    当你git clone时, <font color='cornflowerblue'>Git 会为远程仓库中的每个分支在本地仓库中创建一个远程分支</font>（比如 o/main）。然后再创建一个**跟踪远程仓库中活动分支**的本地分支，默认情况下这个**本地分支会被命名为 main**。
 >
 > ​        克隆完成后，你会得到一个本地分支（如果没有这个本地分支的话，你的目录就是“空白”的），但是可以查看远程仓库中所有的分支（如果你好奇心很强的话）。这样做对于本地仓库和远程仓库来说，都是最佳选择。
 >
->  	这也解释了为什么会在克隆的时候会看到下面的输出：
+> ​		这也解释了为什么会在克隆的时候会看到下面的输出：
 >
->     local branch "main" set to track remote branch "o/main"
->  	可以让任意分支跟踪 o/main, 然后该分支会像 main 分支一样得到隐含的 push 目的地以及 merge 的目标。 这意味着你可以在分支 totallyNotMain 上执行 git push，将工作推送到远程仓库的 main 分支上。
+> ​					local branch "main" set to track remote branch "o/main"
 >
+> ​		可以让任意分支跟踪 o/main, 然后该分支会像 main 分支一样得到**隐含的 push 目的地以及 merge 的目标**。 这意味着你可以在分支 totallyNotMain 上
+>
+> 执行 git push，将工作推送到远程仓库的 main 分支上。
+
+
+
 > 有两种方法设置这个属性，第一种就是通过远程分支检出一个新的分支，执行:
 >
-> git checkout -b totallyNotmain o/main 就可以创建一个名为 totallyNotmain 的分支，它跟踪远程分支 o/main。我们检出一个名叫 foo 的新分支，让其跟踪远程仓库中的 main。
+> ​			git checkout -b totallyNotmain o/main # 创建一个名为 totallyNotmain 的分支，它跟踪远程分支 o/main。
+>
+> 我们检出一个名叫 foo 的新分支，让其跟踪远程仓库中的 main。
 
 ![image-20240801180424434](./git常用命令.assets/image-20240801180424434.png)
 
 ```
-git checkout -b foo o/main;git pull
+git checkout -b foo o/main
+git pull
 ```
 
 ![image-20240801180457427](./git常用命令.assets/image-20240801180457427.png)
 
-> 使用了隐含的目标 o/main 来更新 foo 分支。需要注意的是<font color='red'> main 并未被更新</font>！
+> ​		使用了隐含的目标 o/main 来更新 foo 分支。需要注意的是<font color='red'> main 并未被更新</font>！
+
+我们将一个并不叫 main 的分支上的工作推送到了远程仓库中的 main 分支上。
+
+> 输入：
 >
->     # 我们将一个并不叫 main 的分支上的工作推送到了远程仓库中的 main 分支上。
->     输入git checkout -b foo o/main;git commit;git push，效果相同。
+> git checkout -b foo o/main
+>
+> git commit
+>
+> git push，效果相同。
+
+
+
 > ​        另一种方法就是使用：`git branch -u o/main foo`（这个命令更明确！）这样 foo 就会跟踪 o/main 了。如果当前就在 foo 分支上, 还可以省略 foo：直接使用git branch -u o/main
->
 
 ![image-20240801180728495](./git常用命令.assets/image-20240801180728495.png)
 
