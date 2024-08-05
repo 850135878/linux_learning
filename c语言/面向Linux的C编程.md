@@ -498,12 +498,12 @@ int dup2(int oldfd,int newfd);
 
 ### 3.1 time和ctime输出系统时间
 
-​	输出系统当前的时间,比如我们使用 date 命令
+​	输出系统当前的时间，使用<font color='red'> date 命令</font>
 
 ```c
-// 返回从1970年1月1日0点以来的秒数。
+// 1.返回从1970年1月1日0点以来的秒数。
 time_t time(time_t *tloc); 
-// 将秒数转化为长度固定为26的字符串  可能值为Thu Dec 7 14：58：59 2000 
+// 2.再将秒数转化为长度固定为26的字符串  可能值为Thu Dec 7 14：58：59 2000 
 char *ctime(const time_t *clock);
 ```
 
@@ -539,9 +539,9 @@ printf("Used Time：%f\n",timeuse);
 
 ### 3.3 计时器使用
 
-linux为每一个进程提供了 3 个内部间隔计时器
+linux为每一个进程提供了 3 个内部间隔计时器类型：
 
-（1）ITIMER_REAL：减少实际时间，一到时就发出 SIGALRM 信号. 
+（1）ITIMER_REAL：减少实际时间，一到时就发出 SIGALRM 信号.    `无论进程是否在执行，定时器都会继续计时`
 
 （2）ITIMER_VIRTUAL：减少有效时间(进程执行的时间)，产生 SIGVTALRM 信号. 
 
@@ -549,18 +549,723 @@ linux为每一个进程提供了 3 个内部间隔计时器
 
 ```c
 struct itimerval { 
-	struct timeval it_interval;  
-	struct timeval it_value;  // it_value减少的时间，当值为0时，就发出相应的信号，然后设置为 it_interval 值
+	struct timeval it_interval; // 指定了定时器每隔多长时间（以秒和微秒为单位）重复触发。 当定时器到点了，就会将值放到it_value中
+	struct timeval it_value;  // 指定了定时器首次触发之前要等待的时间。 下一个计时器的过期时间
 }
 ```
 
 ```c
 //  which：表示上面使用三个计时器中的哪一个
 
-// getitimer：获取间隔计时器的时间值
+// getitimer：获取保存在value中的间隔计时器的时间值
+// 获取当前某个定时器的设置
 int getitimer(int which, struct itimerval *value); 
 
-// setitimer：设置间隔计时器的时间值为newval，并将旧值保存在oldval中
+// setitimer：设置定时器新的间隔时间值为newval，并（可选地）获取旧的值
+//   		 设置或重置某个定时器的值，并（可选地）获取旧的值
 int setitimer(int which, struct itimerval *newval, struct itimerval *oldval);
+```
+
+【示例】
+
+```c
+#define _XOPEN_SOURCE 700
+#include <stdio.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include <signal.h>
+#include <string.h>
+#include <stdlib.h>
+#define PROMPT "时间已经过去两秒了...\n"
+
+char *prompt = PROMPT;
+unsigned int len;
+
+void prompt_info(int signo)
+{
+    write(STDERR_FILENO, prompt, len);
+}
+
+void init_time()
+{
+    struct itimerval val;
+    memset(&val, 0, sizeof(struct itimerval));
+    // 设置定时器时间，每隔2秒触发
+    val.it_interval.tv_sec = 2;
+    val.it_interval.tv_usec = 0;
+    // 设置首次触发时间，两秒后
+    val.it_value = val.it_interval;
+    setitimer(ITIMER_PROF, &val, NULL);
+}
+
+void init_sigaction(void)
+{
+    struct sigaction act;
+    act.sa_handler = prompt_info;
+    act.sa_flags = 0;
+    sigemptyset(&act.sa_mask);
+    sigaction(SIGPROF, &act, NULL);
+}
+
+int main()
+{
+    len = strlen(PROMPT);
+    init_sigaction();
+    init_time();
+    while (1);
+    exit(0);
+}
+```
+
+
+
+## 4. 信号处理
+
+### 4.1 信号产生
+
+
+
+![image-20240805101550740](./面向Linux的C编程.assets/image-20240805101550740.png)
+
+可通过`man 7 signal`查看信号的详细解释。
+
+
+
+发送信号有两种来源：
+
+- 硬件原因（如按下键盘）
+- 软件原因（使用**系统函数或命令**发出信号）
+  - 系统函数（kill、raise、alarm、setitimer）
+
+```c
+#include <sys/types.h>
+#include <signal.h>
+#include <unistd.h>
+
+// kill系统调用负责向进程发送信号 sig
+int kill(pid_t pid,int sig);
+int raise(int sig); 
+unisigned int alarm(unsigned int seconds);
+```
+
+#### 4.1.1 kill
+
+kill系统调用负责向进程发送信号 sig，它可以用来终止运行不正常的程序或者反过来拒绝终止的程序。
+
+- 如果 pid >0，那么信号 sig 被发送到**进程 pid.** 
+
+- 如果 pid = 0，那么信号 sig 被发送到**所有和 pid 进程在同一个进程组**的进程
+
+- 如果 pid = -1,那么信号**发给所有的进程表**中的进程。除了最大的那个进程号。 
+
+如果 pid 由于-1,和 0 一样,只是发送进程组是-pid
+
+
+
+#### 4.1.2 raise
+
+raise 系统调用向自己发送一个 sig 信号。
+
+
+
+#### 4.1.3 alarm
+
+alarm 在 seconds 秒后向自己发送一个 SIGALRM 信号
+
+
+
+### 4.2 信号操作
+
+#### 4.2.1 信号集操作
+
+```c
+#include <signal.h>; 
+// 初始化信号集合set,将set设置为空
+int sigemptyset(sigset_t *set); 
+// 初始化信号集合,只是将信号集合设置为所有信号的集合
+int sigfillset(sigset_t *set); 
+
+// 将信号signo加入到信号集合之中
+int sigaddset(sigset_t *set,int signo); 
+// 将信号从信号集合中删除
+int sigdelset(sigset_t *set,int signo); 
+// 查询信号是否在信号集合之中
+int sigismember(sigset_t *set,int signo); 
+
+// 将指定的信号集合set加入到进程的信号阻塞集合之中去
+//        oset：当前的进程信号阻塞集
+//        how： 函数的操作方式
+int sigprocmask(int how,const sigset_t *set,sigset_t *oset);
+```
+
+【示例】
+
+```c
+#define _XOPEN_SOURCE 700
+#include <signal.h>
+#include <stdio.h>
+#include <math.h>
+#include <stdlib.h>
+
+int main()
+{
+    int y;
+    sigset_t intmask;
+    sigemptyset(&intmask);
+    sigaddset(&intmask, SIGINT);
+    while (1)
+    {
+        // 设置阻塞信号集
+        //    若没有取消阻塞“CTRL+C”信号，则按下“CTRL+C”，程序不会被终止（信号被屏蔽了，所以进程接收不到，没反应）
+        sigprocmask(SIG_BLOCK, &intmask, NULL);
+        fprintf(stderr, "SIGINT signal blocked\n");
+        for (int i = 0; i < 10; i++)
+        {
+            y = i;
+        }
+        fprintf(stderr, "Blocked calculation is finished\n");
+        /* 取消阻塞后，信号SIGINT就能起作用了 */
+        //    加上取消阻塞后，按下“CTRL+C”，信号发给进程，程序被终止（没反应）
+        sigprocmask(SIG_UNBLOCK, &intmask, NULL);
+        for (int i = 0; i < 10; i++)
+        {
+            y = i;
+        }
+        fprintf(stderr, "Unblocked calculation is finished\n");
+    }
+    exit(0);
+}
+```
+
+
+
+#### 4.2.2 sigaction函数
+
+```c
+#include <signal.h>
+// signo：要处理的信号 (SIGKILL和SIGSTOP除外)
+// act：对这个信号如何处理
+// oact：对这个信号历史的处理，一般为NULL，用于保存信息的。
+int sigaction(int signo,const struct sigaction *act, struct sigaction *oact); 
+	
+struct sigaction {  
+	void (*sa_handler)(int signo);   // 要进行的信号操作的函数
+	void (*sa_sigaction)(int siginfo_t *info,void *act);  // 和sa_restore使用的不多
+	sigset_t sa_mask;    // 阻塞信号集，指定在信号处理函数执行期间需要被阻塞的信号集合
+	int sa_flags;  // 设置信号操作的各个情况，一般设置为0
+	void (*sa_restore)(void); 
+}
+```
+
+> sa_handler 有两个特殊的值：SIG_DEL 和 SIG_IGN
+>
+> - SIG_DEL 是使用缺省的信号操作函数（default）
+>
+> - SIG_IGN 是使用忽略该信号的操作函数（ignore）
+
+【示例】捕捉用户的”CTRL+C“信号
+
+```c
+#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <unistd.h>
+#define PROMPT "你想终止程序吗?" 
+char *prompt=PROMPT; 
+
+void ctrl_c_op(int signo) 
+{ 
+	write(STDERR_FILENO,prompt,strlen(prompt)); 
+}
+/**
+*在上面程序的信号操作函数之中,我们使用了 write 函数而没有使用 fprintf 函数
+*   是因为如果我们在信号操作的时候又有一个信号发生,那么程序该如何运行呢? 
+*      为了处理在信号处理函数运行的时候信号的发生,我们需要设置sa_mask成员
+*      我们将我们要屏蔽的信号添加到sa_mask结构当中去，这样这些函数在信号处理的时候就会被屏蔽掉的.
+*/
+int main() 
+{ 
+	struct sigaction act; 
+	act.sa_handler=ctrl_c_op; 
+	sigemptyset(&act.sa_mask); 
+	act.sa_flags=0; 
+	if(sigaction(SIGINT,&act,NULL)<0) 
+	{ 
+		fprintf(stderr,"Install Signal Action Error：%s\n\a",strerror(errno)); 
+		exit(1); 
+	} 
+	while(1); 
+}
+```
+
+#### 4.2.3 其他信号函数（很少用到）
+
+```c
+#include <unistd.h> 
+#include <signal.h>
+
+// 是挂起进程直到一个信号发生了
+int pause(void);
+// 挂起进程，只是在调用的时候用sigmask取代当前的信号阻塞集合
+int sigsuspend(const sigset_t *sigmask);
+```
+
+```c
+#include <sigsetjmp>
+int sigsetjmp(sigjmp_buf env,int val);
+void siglongjmp(sigjmp_buf env,int val);
+```
+
+
+
+
+
+## 5. 消息管理
+
+### 5.1 无名信号量
+
+信号量主要是用来保护共享资源，使得资源在一个时刻只有一个进程所拥有。PV操作
+
+**无名信号量一般<font color='red'>用于线程间同步或互斥</font>，而有名信号量一般用于进程间同步或互斥**。
+
+> 无名信号量的操作与有名信号量差不多，但它不使用文件系统标识，直接存在程序运行的内存中， **不同进程之间不能访问，不能用于不同进程之间相互访问**。
+
+```c
+#include <semaphore.h>
+// 创建一个信号量,并初始化其值为 value
+// pshared：决定了信号量能否在几个进程间共享，但linux中还未实现，所以一般设置为0
+int sem_init(sem_t *sem,int pshared,unsigned int value); 
+// 销毁信号量
+int sem_destroy(sem_t *sem); 
+
+// 阻塞进程,直到信号量的值大于 0
+int sem_wait(sem_t *sem); 
+// 不阻塞，当信号灯的值为 0 的时，返回 EAGAIN，表示以后重试
+int sem_trywait(sem_t *sem);
+
+// 将信号量的值加一，同时发出信号，唤醒等待的进程
+int sem_post(sem_t *sem); 
+// 获取信号量的值
+int sem_getvalue(sem_t *sem);
+```
+
+
+
+### 5.2 System V信号量
+
+```c
+#include <sys/types.h>; 
+#include <sys/ipc.h>; 
+#include <sys/sem.h>; 
+
+// 根据 pathname 和 proj 来创建一个关键字
+key_t ftok(char *pathname,char proj);
+
+// 创建或者打开一个信号量集
+/* 参数说明 : 
+		key: 由ftok创建的或者可以是IPC_PRIVATE表明由系统选用一个关键字
+		nsems： >0 创建一个新的信号量集，指定集合中信号量的数量，一旦创建就不能更改。
+			   =0 访问一个已存在的集合
+		semflg：创建的权限标志（和我们创建一个文件的标志相同）
+*/
+int semget(key_t key,int nsems,int semflg); 
+
+/* 对信号集的一系列控制操作（semval 的赋值等）
+  参数说明 : semid  :  要操作的信号标志
+            semnum :  信号的个数
+            cmd：操作的命令  两种：SETVAL(设置信号量的值)和 IPC_RMID(删除信号量).
+            arg：给cmd的参数 
+*/
+int semctl(int semid,int semnum,int cmd,union semun arg); 
+
+/**
+	实现信号量的PV操作 
+	参数说明： 
+		semid：是 semget 返回的信号量集索引
+		spos： 指向信号量操作结构体数组
+		nspos： 表明数组的个数, opsptr 所指向的数组中的 sembuf 结构体的个数
+*/
+int semop(int semid,struct sembuf *spos,int nspos); 
+
+// 信号量操作结构体 封装了PV操作的基本参数 
+struct sembuf {  
+    short sem_num; /* 要操作的信号量在信号量集里的编号  */ 
+    short sem_op; /* 信号量操作
+                     1.sem_op > 0 : 其值就加到信号量上，即释放信号量控制的资源,并唤醒等待信号增加的进程
+                     2.sem_op = 0:  如果信号量是0，就返回，否则，阻塞直到信号量值为0
+                     3.sem_op < 0 : 判断信号量 + 这个负值:
+                     					- 如果=0，唤醒等待信号量为0的进程；
+                     					-    <0，函数阻塞
+                                        -    >0, 从信号量里面减去这个值，并返回
+                  */
+    short sem_flg; /* 操作的标志 
+    				 Value: 1. SEM_UNDO 由进程自动释放信号量
+                            2. IPC_NOWAIT 不阻塞
+    				*/ 
+};
+```
+
+
+
+### 5.3 消息队列
+
+```c
+// 1.创建或获取一个消息队列描述符
+/**
+*   key: 键值，唯一标识一个消息队列，可取由ftok创建的key值或指定的一个非负整数值
+*   msgflg: 用于控制 msgget 函数的行为  IPC_CREAT | IPC_EXCL时，若消息队列不存在则创建，否则返回失败并设置erron标识为EEXIST
+*/
+int msgget(key_t key,int msgflg); 
+
+
+// 2.向标识符为msgid的消息队列中写入消息   成功返回0，失败返回-1并设置errno指明错误的原因
+/*
+	msqid: 消息队列标识符
+	msgp: 是一个指针，指向调用者定义的结构
+	msgsz: 发送消息正文的字节数，注意这里的是指正文内容mtext里面数据的字节数,不含消息类型占用的4个字节
+	msgflg: 发送消息标志位
+			0 当消息队列满时，msgsnd将会阻塞，直到消息能写进消息队列
+			IPC_NOWAIT	当消息队列已满的时候，msgsnd函数不等待立即返回
+			IPC_NOERROR 若发送的消息大于size字节，则把该消息截断，截断部分将被丢弃，且不通知发送进程
+*/
+int msgsnd(int msgid,struct msgbuf *msgp,int msgsz,int msgflg); 
+
+
+// 3.向标识符为msgid的消息队列中写入消息 成功返回实际读取到的字节数，失败返回-1并设置errno指明错误的原因
+/*
+	msqid: 消息队列标识符
+	msgp: 指针，指向接收数据结构体
+	msgsz: 接收的正文内容mtext字节大小，不含消息类型占用的4个字节
+	msgtyp: 要接收的消息队列的消息类型
+	msgflg:接收消息标志位 
+	       0 阻塞式接收消息，没有该类型的消息msgrcv函数一直阻塞等待
+	       IPC_NOWAIT  如果没有返回条件的消息调用立即返回，此时错误码为ENOMSG
+	       IPC_NOERROR 如果队列中满足条件的消息内容大于所请求的size字节，则把该消息截断，截断部分将被丢弃
+*/
+int msgrcv(int msgid,struct msgbuf *msgp,int msgsz, long msgtype,int msgflg); 
+
+
+// 4.获取或设置消息队列的属性 成功返回0，失败返回-1并设置errno指明错误的原因
+/**
+	msqid: 由msgget函数返回的消息队列标识符
+	cmd: 操作指令
+	buf: 一个指向 msqid_ds 结构的指针。
+         当 cmd 是 IPC_STAT 时，该结构用于获取消息队列的状态信息
+         当 cmd 是 IPC_SET 时，该结构用于设置消息队列的属性
+         当 cmd 是 IPC_RMID 时，设置为NULL表示删除该消息队列
+*/
+int msgctl(int msgid,int cmd,struct msqid_ds *buf);
+```
+
+```c
+// 用户自定义结构体
+struct msgbuf { 
+    long mtype;       /* message type, must be > 0 */
+	char mtext[10];    /* message data */ 
+}
+
+struct msqid_ds {
+       struct ipc_perm msg_perm;   /* Ownership and permissions */
+       time_t          msg_stime;  /* Time of last msgsnd(2) */
+       time_t          msg_rtime;  /* Time of last msgrcv(2) */
+       time_t          msg_ctime;  /* Time of creation or last
+                                      modification by msgctl() */
+       unsigned long   msg_cbytes; /* # of bytes in queue */
+       msgqnum_t       msg_qnum;   /* # number of messages in queue */
+       msglen_t        msg_qbytes; /* Maximum # of bytes in queue */
+       pid_t           msg_lspid;  /* PID of last msgsnd(2) */
+       pid_t           msg_lrpid;  /* PID of last msgrcv(2) */
+};
+
+struct ipc_perm {
+        key_t          __key;       /* Key supplied to msgget(2) */
+        uid_t          uid;         /* Effective UID of owner */
+        gid_t          gid;         /* Effective GID of owner */
+        uid_t          cuid;        /* Effective UID of creator */
+        gid_t          cgid;        /* Effective GID of creator */
+        unsigned short mode;        /* Permissions */
+        unsigned short __seq;       /* Sequence number */
+};
+
+```
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
+
+#define MSGSIZE 1024
+
+struct msgbuf
+{
+    long mtype;
+    char mtext[80];
+};
+
+void usage(char *prog_name, char *msg)
+{
+    if (msg != NULL)
+        fputs(msg, stderr);
+
+    fprintf(stderr, "Usage: %s [options]\n", prog_name);
+    fprintf(stderr, "Options are:\n");
+    fprintf(stderr, "-s \"msg\"       send message using msgsnd()\n");
+    fprintf(stderr, "-r             read message using msgrcv()\n");
+    fprintf(stderr, "-t             message type (default is 1)\n");
+    fprintf(stderr, "-k             message queue key (default is 1234)\n");
+    fprintf(stderr, "-d keyvalue    remove a message queue\n");
+    exit(EXIT_FAILURE);
+}
+
+/*
+ * init_data_msg 初始化消息队列，设置消息队列大小
+ *
+ * return 返回消息的的msg_id
+ */
+int msg_queue_init(key_t key)
+{
+    int ret, msg_id;
+	msg_id = msgget(key, IPC_CREAT | IPC_EXCL | 0666);//创建
+	if (msg_id == -1) {
+		if (errno == EEXIST) {
+            printf("Message queue which key: %d is already exit !\n", key);
+			msg_id = msgget(key, 0);
+            return msg_id;
+		} else {
+			printf("Message queue creation failed: %s(errno: %d)\n", strerror(errno), errno);
+			return -1;
+		}
+	}
+
+    // 普通用户会设置失败,可能跟系统的限制或SELinux/AppArmor策略有关,要以root运行才行
+    struct msqid_ds buf;
+	memset(&buf, 0, sizeof(struct msqid_ds));
+
+	ret = msgctl(msg_id, IPC_STAT, &buf);
+	if (ret == -1) {
+		printf("msgctl IPC_STAT failed: %s(errno: %d)\n", strerror(errno), errno);
+	}
+	buf.msg_qbytes = 1048576;//1M
+	ret = msgctl(msg_id, IPC_SET, &buf);
+	if (ret == -1) {
+		printf("data msgctl IPC_SET failed: %s(errno: %d)\n", strerror(errno), errno);
+	}
+
+    return msg_id;
+}
+
+// 删除指定key值的消息队列
+int delete_msg_queue(key_t key) {
+    int msgid;
+    // 通过key值获取消息队列ID
+    msgid = msgget(key, 0);
+    if (msgid == -1) {
+        if (errno == ENOENT) {
+            fprintf(stderr, "Message queue with key %d does not exist.\n", key);
+        }
+        return -1;
+    }
+    
+    // 删除消息队列
+    if (msgctl(msgid, IPC_RMID, NULL) == -1) {
+        perror("msgctl");
+        return -1;
+    }
+    printf("Message queue with key %d deleted successfully.\n", key);
+    return 0;
+}
+
+void send_msg(int qid, int msgtype, const char* mtext)
+{
+    struct msgbuf msg;
+    time_t t;
+
+    msg.mtype = msgtype;
+
+    time(&t);
+    snprintf(msg.mtext, sizeof(msg.mtext), "%s at %s", mtext,
+             ctime(&t));
+
+    if (msgsnd(qid, &msg, sizeof(msg.mtext),
+               IPC_NOWAIT) == -1) {
+        perror("msgsnd error");
+        exit(EXIT_FAILURE);
+    }
+    printf("sent: %s\n", msg.mtext);
+}
+
+void get_msg(int qid, int msgtype)
+{
+    struct msgbuf msg;
+
+    if (msgrcv(qid, &msg, sizeof(msg.mtext), msgtype,
+               MSG_NOERROR | IPC_NOWAIT) == -1) {
+        if (errno != ENOMSG) {
+            perror("msgrcv");
+            exit(EXIT_FAILURE);
+        }
+        printf("No message available for msgrcv()\n");
+    } else
+        printf("message received: %s\n", msg.mtext);
+}
+
+int main(int argc, char *argv[])
+{
+    int qid, opt;
+    int mode = 0;        /* 1 - send, 2 - receive , 3 - delete*/
+    int msgtype = 1;
+    int msgkey = 1234;
+    char sendbuf[MSGSIZE] = {0};
+
+    while ((opt = getopt(argc, argv, "s:rt:k:d:")) != -1) {
+        switch (opt)
+        {
+        case 's':
+            mode = 1;
+            memcpy(sendbuf, optarg, strlen(optarg));
+            break;
+        case 'r':
+            mode = 2;
+            break;
+        case 't':
+            msgtype = atoi(optarg);
+            if (msgtype <= 0)
+                usage(argv[0], "-t option must be greater than 0\n");
+            break;
+        case 'k':
+            msgkey = atoi(optarg);
+            break;
+        case 'd':
+            mode = 3;
+            msgkey = atoi(optarg);
+            break;
+        default:
+            usage(argv[0], "Unrecognized option\n");
+        }
+    }
+
+    if (mode == 0)
+        usage(argv[0], "must use either -s or -r option\n");
+    else if (mode == 3)
+        delete_msg_queue(msgkey);
+    else {
+        qid = msg_queue_init(msgkey);
+        if (mode == 2)
+            get_msg(qid, msgtype);
+        else
+            send_msg(qid, msgtype, sendbuf);
+    }
+
+    return 0;
+}
+```
+
+
+
+### 5.4 共享内存（效率最高）
+
+```c
+// 创建一个共享内存。成功返回共享内存ID，失败返回-1   0666|IPC_CREAT（所有用户对它可读写，文件不存在，则创建它）
+/* 参数 
+	   key:共享内存的键值（16进制）
+       size:共享内存的大小（字节）
+       shmflg:共享内存的访问权限（与文件权限一样）
+            IPC_CREAT 
+            IPC_EXCL 
+*/
+int shmget(key_t key,int size,int shmflg); 
+
+// 把共享内存连接到进程的地址空间。成功返回映射到共享内存空间中的起始地址，失败返回NULL
+/*
+	 参数:
+        shmid:共享内存ID号
+        shmaddr:NULL 让系统选择一个合适的地址映射
+                不为NULL， shmflg设定为SHM_RND 选择离给定地址最近的能够映射的地址进行映射，否则传递地址为4k的整数倍
+*/
+void *shmat(int shmid,const void *shmaddr,int shmflg); 
+
+// 解除映射。返回值:成功返回0，失败返回-1 
+/*
+	参数:
+	   shmaddr:映射的地址   
+*/
+int shmdt(const void *shmaddr); 
+
+// 向共享内存发送命令。返回值:成功返回0 ，失败返回-1 
+/*
+	参数:
+	   shmid:共享内存ID号
+       cmd:IPC_RMID 删除共享内存
+       buf:NULL   
+*/
+int shmctl(int shmid,int cmd,struct shmid_ds *buf); 
+```
+
+
+
+<img src="./面向Linux的C编程.assets/image-20240805152046884.png" alt="image-20240805152046884" style="zoom: 80%;" />
+
+```
+>> ipcs -m           # 查看系统的共享内存
+>> ipcrm -m 共享内存id  # 手动删除
+```
+
+![image-20240805154219280](./面向Linux的C编程.assets/image-20240805154219280.png)
+
+```c
+#include <stdio.h>
+#include <sys/shm.h>
+#include <stdlib.h>
+#include <string.h>
+struct stu
+{
+    int no;
+    char name[50];
+};
+
+int main()
+{
+    // 1.创建共享内存
+    int shmid = shmget(IPC_PRIVATE, sizeof(struct stu), 0640 | IPC_CREAT);
+    if (shmid == -1)
+    {
+        printf("shmget exec error!\n");
+        exit(1);
+    }
+    printf("共享内存id:%d\n", shmid);
+    // 2.把共享内存连接到当前进程的地址空间
+    struct stu *s = (struct stu *)shmat(shmid, NULL, 0);
+    if (s == (void *)-1)
+    {
+        printf("shmat exec error!\n");
+        exit(1);
+    }
+    // 3.对共享内存进行读写
+    s->no = 100;
+    strcpy(s->name, "小黄");
+
+    // 4.把共享内存从当前进程分离
+    if (shmdt(s))
+    {
+        printf("shmdt exec error!\n");
+        exit(1);
+    }
+    printf("shmdt exec success!\n");
+
+    // 5.删除共享内存
+    if (shmctl(shmid, IPC_RMID, NULL))
+    {
+        printf("shmctl exec error!\n");
+        exit(1);
+    }
+    printf("shmctl exec success!\n");
+}
 ```
 
