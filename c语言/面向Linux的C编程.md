@@ -823,9 +823,129 @@ void siglongjmp(sigjmp_buf env,int val);
 
 ## 5. 消息管理
 
-### 5.1 无名信号量
+### 5.1 信号量
 
-信号量主要是用来保护共享资源，使得资源在一个时刻只有一个进程所拥有。PV操作
+信号量：一种用于不同进程间或同一个进程内不同线程间同步的原语。
+
+信号量主要是用来<font color='red'>保护共享资源</font>，使得资源在一个时刻只有一个进程所拥有。PV操作
+
+> 为什么已经有了互斥锁和条件变量，还需要信号量？
+>
+> 【原因】：提供**信号量**主要是提供一种**进程间的同步方式**，这些进程**可能共享**，也**可能不共享内存区**。
+>
+> ​				  而**互斥锁和条件变量**是**作为线程间的同步机制**说明的，这些线程总是**共享（某个）内存区**。
+
+
+
+
+
+#### 5.1.1 Posix 有名信号量
+
+​		**可用于进程或线程间的同步。**
+
+​		Posix 有名信号量是由可能**与文件系统中的路径名对应的名字**来标识的。但<font color='cornflowerblue'>并不是真正存放在文件系统内的某个文件中</font>。
+
+> 在嵌入式实时系统中，可能使用文件系统中的路径名来标识信号量，但真正的信号量值是存放在内核中的某个地方。
+>
+> 但如果说用到映射文件，信号量的值确实会出现在某个文件中。
+
+<img src="./面向Linux的C编程.assets/image-20240805225140961.png" alt="image-20240805225140961" style="zoom:80%;" />
+
+<img src="./面向Linux的C编程.assets/屏幕截图 2024-08-05 231252.png" alt="屏幕截图 2024-08-05 231252" style="zoom:67%;" />
+
+<font color='red'>**二值信号量(0/1)的初始值通常为1，计数信号量的初始值大于1。**</font>
+
+- **sem_open 创建/打开信号量**
+
+```c
+#include <semaphore.h>
+
+// 1. 创建或打开一个有名信号量
+//    若成功，返回一个指向信号量的指针；失败则为SEM_FAILED        #define SEM_FAILED ((sem_t *)(-1))
+sem_t *sem_open(const char *name, int oflag);
+
+// oflag: 0、O_CREAT或O_CREAT|O_EXCL 如果指定为O_CREAT，就需要第三、四个参数
+// mode: 限定位 O_RDONLY或O_WRONLY或O_RDWR
+// value: 信号量的初始值，不能超过SEM_VALUE_MAX（必须至少为32767）
+sem_t *sem_open(const char *name, int oflag, mode_t mode, unsigned int value);
+```
+
+> O_CREAT|O_EXCL：表示信号量不存在，则创建并初始化它；若信号量已存在，这样指定会报错。而单独使用O_CREAT不会报错。
+
+
+
+- **sem_close 关闭信号量**
+
+​		当一个进程终止时，内核会对其上仍打开的所有有名信号量自动执行关闭操作。
+
+​		**`进程主动终止（调用exit或_exit）`、`非自愿终止（通过向进程发送一个Unix信号）`**
+
+```c
+// 并没有将它从系统中删除。Posix 有名信号量是随内核持续的，即使当前进程没有打开它，它的值仍然存在。
+int sem_close(sem_t *sem)
+```
+
+
+
+- **sem_unlink 从系统中删除**
+
+  每个信号量都有一个引用计数器，来记录当前的打开次数。
+
+  当引用计数 > 0：name就能从系统中删除，而信号量的析构需要等最后一个sem_close发生为止。
+
+```c
+int sem_unlink(const char *name)  // 类似与文件I/O的unlink函数
+```
+
+
+
+- **sem_wait和sem_trywait函数**
+
+​		sem_wait  测试所指定信号量的值
+
+​				-    若值 > 0，将它减1并立即返回。
+
+​			    -    若值 = 0，调用线程就被阻塞，直到该值 > 0，再将它减1，函数随后返回。     `若被某个信号中断，sem_wait就可能过早返回，返回错误为EINTER`
+
+```c
+int sem_wait(sem_t *sem);
+
+// 与上者区别，当信号量值为0时，不再阻塞线程，而是返回一个EAGAIN错误。        
+int sem_trywait(sem_t *sem);
+```
+
+
+
+- **sem_post和sem_getvalue函数**  
+
+  当线程使用完信号量时，调用sem_post，将信号量的值+1，然后唤醒等待该信号量的其他线程，                                        
+
+```c
+int sem_post(sem_t *sem);
+
+// valp：指向整数的指针，该整数会被设置为信号量的当前值。
+//       它表示当前有多少个线程或进程可以被信号量允许继续执行（对于二值信号量来说，就是0或1；对于计数信号量来说，可以是任何非负整数值）。
+int sem_getvalue(sem_t *sem, int *valp);
+```
+
+
+
+
+
+#### 5.1.2 Posix 基于内存的信号量
+
+存放在共享内存中，可用于不同进程或线程间的同步。
+
+> Posix 信号量不必在内核中维护，System V是由在内核中维护。
+>
+
+<img src="./面向Linux的C编程.assets/image-20240805231443511.png" alt="image-20240805231443511" style="zoom: 80%;" />
+
+<img src="./面向Linux的C编程.assets/image-20240805231539150.png" alt="image-20240805231539150" style="zoom:80%;" />
+
+
+
+
 
 **无名信号量一般<font color='red'>用于线程间同步或互斥</font>，而有名信号量一般用于进程间同步或互斥**。
 
@@ -852,7 +972,7 @@ int sem_getvalue(sem_t *sem);
 
 
 
-### 5.2 System V信号量
+#### 5.1.2 System V信号量
 
 ```c
 #include <sys/types.h>; 
