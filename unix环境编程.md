@@ -245,6 +245,7 @@ fork调用一次，返回两次。
 
 
 
+<<<<<<< Updated upstream
 #### 10.1.3 信号量
 
 信号量：一种用于不同进程间或同一个进程内不同线程间同步的原语。
@@ -410,10 +411,166 @@ struct sembuf {
 唤醒机制：
 	当线程 B 执行某个操作（如增加信号量的值）使得信号量值从 大于0 变为等于 0 时，操作系统会自动唤醒所有在等待该信号量为 0 的线程。
 	在这时，线程 A 被自动唤醒并继续执行。
+=======
+##### 2. 命名管道
+
+通过FIFO文件（也称命名管道）来进行不同进程间的通信。
+
+不同进程通过写入和读取相同FIFO文件进行通信。           `半双工通信，调用一次mkfifo函数，只生成一个管道（缓冲区）`
+
+
+
+**特点：**
+
+- FIFO文件位于文件系统中，可以像其他文件一样进行访问和管理。
+- FIFO文件可以通过文件名进行识别和引用，而不仅仅依赖于文件描述符。
+- FIFO文件可以在不同进程之间进行双向通信，允许同时进行读取和写入操作。
+
+
+
+```c
+// 1. 创建命名管道文件 FIFO文件
+int mkfifo(const char* pathname, mode_t mode);
+```
+
+**实现原理：**
+
+1.  进程通过调用`mkfifo函数`创建一个FIFO文件，FIFO文件对应一个fifo inode（底层和pipe inode实现相同）
+
+   ![image-20240809135022984](./unix环境编程.assets/image-20240809135022984.png)
+
+2. 进程调用`open函数`打开FIFO文件，由于每个文件都对应唯一的inode节点，所以每个进程打开的是相同的inode节点。
+3. 进程调用`write或read函数`来进行读写管道，实现进程间通信。
+
+<img src="./unix环境编程.assets/image-20240809135354503.png" alt="image-20240809135354503" style="zoom:80%;" />
+
+
+
+#### 10.1.2 System V消息队列
+
+它允许在同一系统上运行的不同进程之间传递消息。
+
+**优点：**
+
+- 可以实现独立的进程间通信，不受进程的启动和结束顺序的影响。
+- 允许多个进程同时向消息队列中写入和读取消息，实现了并发处理。
+- 通过消息优先级机制，可以优先处理重要的消息。
+
+
+
+**实现原理：**
+
+具有相同IPC命名空间的进程能**同时访问IPC命名空间相同内存空间**。
+
+![image-20240809143004516](./unix环境编程.assets/image-20240809143004516.png)
+
+
+
+```
+1. Key: 整数型，用来索引IPC对象（根据哈希表），检索成功返回标识ID；失败则创建IPC对象并返回标识ID。
+2. 标识ID：整数型，用来索引IPC对象（根据radix树），并不是由Key产生，而是由其他信息（如序号）通过算法产生。
+3. IPC对象：消息队列继承IPC对象，提供一些通用信息
+```
+
+![image-20240809144057314](./unix环境编程.assets/image-20240809144057314.png)
+
+3. Key的生成（三种）
+
+   - **第一种：**通过msgget()函数，使用一个随机整数，如：
+
+     ```c
+     /**
+     *	创建或获取一个System V消息队列描述符
+     *   arg： key 唯一标识一个消息队列，可取由ftok创建的key值或指定的一个非负整数值
+     *         msgflg 指定创建消息队列的权限和选项。
+     *                当使用IPC_CREAT | IPC_EXCL时，若消息队列不存在则创建，否则返回失败并设置erron标识为EEXIST
+     *   
+     *   return: 标识ID（成功）  失败返回-1，并设置errno
+     */
+     int msgget(key_t key, int msgflg);
+     ```
+
+     **msgget作用：**
+
+      	1. 通过Key查找IPC对象（消息队列）
+          - 查找成功 ，直接返回标识ID。说明Key已由IPC对象映射。
+          - 查找失败，说明Key对应的IPC对象未创建，需创建一个新的IPC对象。创建的新的IPC对象需根据序号信息生成一个标识ID，再根据标识ID插入radix树。
+      	2. 返回一个标识ID（msgid）	
+          - 后续进程间通信，通过标识ID查找消息队列进行通信
+
+   |      msgflg参数      | IPC对象存在 |        IPC对象不存在        |
+   | :------------------: | :---------: | :-------------------------: |
+   |          0           | 返回标识ID  |           返回-1            |
+   |      IPC_CREATE      | 返回标识ID  | 创建IPC对象，返回新的标识ID |
+   | IPC_CREATE\|IPC_EXEC |   返回-1    | 创建IPC对象，返回新的标识ID |
+
+   
+
+   
+
+   - **第二种：**通过msgget()函数，使用IPC_PRIVATE标识生成，只用于**亲缘关系的进程**
+
+     ```c
+     msgget(IPC_PRIVATE,0644)
+     ```
+
+     
+
+   - **第三种：**使用ftok()函数生成**（推荐）**
+
+     ```c
+     // 通过将pathname的i-node号和proj_id进行组合来生成一个唯一键值
+     // arg:    pathname：存在的路径名
+     //         proj_id：一个整数
+     // return: Key值（成功）  失败返回-1，并设置errno
+     key_t ftok(const char *pathname, int proj_id);
+     ```
+
+     
+
+##### 1. 发送消息 msgsnd
+
+将一个消息添加到指定的消息队列中
+
+```c
+/**
+*	arg: msqid 消息队列的标识ID
+*		 msgp 指向要发送的消息的指针
+* 		 msgsz 要发送的消息的大小。 是消息mtext数据长度
+*		 msgflg 控制发送消息的行为
+*   return:
+*        成功：返回实际发送消息的大小
+*        失败返回-1，并设置errno
+*/
+int msgsnd(int msqid, const void msgp[.msgsz], size_t msgsz, int msgflg);
+```
+
+```c
+struct msgbuf {
+      long mtype;       /* message type, must be > 0 */
+      char mtext[1];    /* message data 柔性数组*/   
+};
+```
+
+##### 2. 接收消息 msgrcv
+
+```c
+/**
+*	arg: msqid 消息队列的标识ID
+*		 msgp 指向接收消息的缓冲区
+* 		 msgsz 接收消息的最大长度。    为0表示接收队列中的第一个消息
+*		 msgflg 接收消息的行为，控制接收操作的行为
+*   return:
+*        成功：返回实际接收消息的长度
+*        失败返回-1，并设置errno
+*/
+int msgsnd(int msqid, const void msgp[.msgsz], size_t msgsz, int msgflg);
+>>>>>>> Stashed changes
 ```
 
 
 
+<<<<<<< Updated upstream
 
 
 ###### 3. semctl()
@@ -686,3 +843,39 @@ int main(int args, char **argv)
 <img src="./unix环境编程.assets/image-20240811180237445.png" alt="image-20240811180237445" style="zoom: 50%;" />
 
 <img src="./unix环境编程.assets/image-20240811180438847.png" alt="image-20240811180438847" style="zoom: 50%;" />
+=======
+##### 3. 控制操作 msgctl
+
+```c
+/**
+*	arg: msqid 消息队列的标识ID
+*		 op 指定要执行的操作  
+*			- IPC_STAT：获取消息队列的状态
+*			- IPC_SET：设置消息队列的状态
+*			- IPC_RMID：删除消息队列
+*
+* 		 buf 指向一个结构体msqid_ds指针，用于传递或获取消息队列的属性信息
+*
+*   return:
+*        成功：IPC_STAT,IPC_SET
+*        失败：返回-1，并设置errno
+*/
+int msgctl(int msqid, int op, struct msqid_ds *buf);
+```
+
+【使用示例】
+
+```v
+// 1. 获取消息队列状态
+struct msqid_ds buf = {0};
+int msgctl(msqid, IPC_STAT, &buf);
+
+// 2. 设置消息队列的状态
+struct msqid_ds buf = {0};
+int msgctl(msqid, IPC_SET, &buf);
+
+// 3. 删除消息队列
+int msgctl(msqid, IPC_RMID, 0);
+```
+
+>>>>>>> Stashed changes

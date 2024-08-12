@@ -844,3 +844,11 @@ error: Your local changes to the following files would be overwritten by merge:
 原因：新建一个分支, 推送这个分支并申请pull request，但是你忘记并直接提交给了main.现在你卡住并且无法推送你的更新.
 
 解决：新建一个分支, 推送到远程服务器。然后git reset你的main分支和远程服务器保持一致，否则下次你pull并且他人的提交和你冲突的时候就会有问题。
+
+
+
+
+
+[http://192.168.26.99/bdpasswd/?mac=](http://192.168.26.99/bdpasswd/?mac=fe:ff:12:13:14:15)00:55:b1:1b:96:fc
+
+fdGnGCQB5eSq

@@ -237,11 +237,14 @@ float a5[0];  // 不可以，数组大小必须大于0
 float a6[2.5]; // 不可以，数组大小必须是整数
 float a7[(int)2.5]; // 可以，已被强制转换为整型常量
 
+
 int n = 10;
 float a8[n]; // C99之前不允许   变长数组
 ```
 
+2.5+3.7/(1.2-0.3)∗5.0
 
+2.5+3.7/(1.2-0.3)*5.0
 
 ### 2.多维数组
 
@@ -820,22 +823,44 @@ extern 类型 变量名;
 
 ## 5. 预处理
 
-### 5.1 预定义符号
+> 预处理指令：
+>
+> - #define、#include
+>
+> - #ifdef、#else、#endif、#ifndef
+> - #if、#elif
+> - #error、#pragma、#line
 
-|  预定义符号   | 说明                                      |
-| :-----------: | :---------------------------------------- |
-|   \__FILE__   | 进行编译的源文件                          |
-|   \__LINE__   | 文件当前的行号                            |
-|   \__DATA__   | 文件被编译的日期                          |
-|   \__TIME__   | 文件被编译的时间                          |
-|   \__STDC__   | 若编译器遵循ANSI C，其值为1；否则，未定义 |
-| \__FUNCTION__ | 返回所在函数的函数名                      |
+
+
+
+
+### 5.1 预定义宏
+
+|       预定义符号       | 说明                                                     |
+| :--------------------: | :------------------------------------------------------- |
+|       \__FILE__        | 进行编译的源文件                                         |
+|       \__LINE__        | 文件当前的行号                                           |
+|       \__DATA__        | 文件被编译的日期                                         |
+|       \__TIME__        | 文件被编译的时间                                         |
+|       \__STDC__        | 若编译器遵循ANSI C，其值为1；否则，未定义                |
+|     \__FUNCTION__      | 返回所在函数的函数名                                     |
+| \__STDC\_\_VERSION\_\_ | 支持C99标准，设置为199901L；支持C11标准，设置为201112L。 |
+
+```
+printf("The file is %s.\n", __FILE__);
+printf("The date is %s.\n", __DATE__);
+printf("The time is %s.\n", __TIME__);
+printf("The version is %ld.\n", __STDC_VERSION__);
+printf("This is line %d.\n", __LINE__);
+printf("This function is %s\n", __func__);
+```
 
 
 
 ### 5.2 #define 宏定义
 
-- **'#'：**将宏参数插入到字符串中
+- **'#'：将宏参数插入到字符串中**
 
 ```c
 #define PRINT(X) printf("变量"#X"的值是%d\n", X);
@@ -865,7 +890,42 @@ float f = 5.5f;
 PRINT(f, "%.1f"); //printf("变量""f""的值是 ""%.1f""\n", f);
 ```
 
-### 5.3 undef移除宏定义
+
+
+- **变量宏：... 和 \_ \_VA\_ARGS\_ \_**
+
+```c
+#define PR(...) printf(__VA_ARGS__)
+PR("Howdy");
+PR("weight = %d, shipping = $%.2f\n", wt, sp);
+
+// 预处理展开后
+printf("Howdy");
+printf("weight = %d, shipping = $%.2f\n", wt, sp)
+```
+
+```c
+#define PR(X, ...) printf("Message " #X ": " __VA_ARGS__)
+int main(void)
+{
+	double x = 48;
+	double y;
+	y = sqrt(x);
+	PR(1, "x = %g\n", x);
+	PR(2, "x = %.2f, y = %.4f\n", x, y);
+	return 0;
+}
+
+// 预处理展开后
+printf("Message " "1" ": " "x = %g\n",x);                 // Message 1: x = 48
+printf("Message " "2" ": " "x = %.2f, y = %.4f\n",x,y);   // Message 2: x = 48.00, y = 6.9282
+```
+
+
+
+### 5.3 #undef移除宏定义
+
+不管前面有没有进行了宏定义，还是可以执行#undef指令。
 
 ```c
 #define M 100
@@ -873,14 +933,59 @@ PRINT(f, "%.1f"); //printf("变量""f""的值是 ""%.1f""\n", f);
 int main(void) {
     int a = M;
     printf("%d\n", M);
-#undef M // 使用完后，移除宏定义
+#undef M // 使用完后，移除宏定义,就可以把M重新定义为一个新值
     return 0;
 }
 ```
 
 
 
-### 5.4 条件编译
+### 5.4 #line和#error
+
+- **#line**
+
+​	#line指令重置\_\_LINE\_\_和\_\_FILE\_\_宏报告的行号和文件名。
+
+```c
+#line 1000          // 把当前行号重置为1000
+#line 10 "100.c"    // 把行号重置为10，文件名重置为”100.c“
+```
+
+- **#error**
+
+​	#error指令让预处理器发出一条错误消息，该消息包含指令中的文本。如果可能的话，编译过程应该中断。
+
+```c
+#if __STDC_VERSION__ != 201112L
+#error Not C11
+#endif
+
+// 编译后输出
+newish.c:14:2: error: #error Not C11
+// gcc -std=c11 newish.c  输出空
+```
+
+
+
+### 5.5 #pragma
+
+\#pragma把编译器指令放入源代码中
+
+> 例如，在开发C99时，标准被称为C9X，可以使用下面的编译指示（pragma）让编译器支持C9X：
+>
+> \#pragma c9x on
+
+
+
+
+
+
+
+
+
+### 5.6 条件编译
+
+让编译器根据编译时的条件执行或忽略信息（或代码）块。
 
 - 常量表达式
 
@@ -918,8 +1023,6 @@ int main(void) {
 #endif 
 ```
 
-
-
 ```c
 #define __DEBUG__ 
 int main(void)
@@ -937,23 +1040,50 @@ int main(void)
 }
 ```
 
+较新的编译器提供另一种方法测试名称是否已定义，即用#if defined (VAX)代替#ifdef VAX。
 
 
-### 5.5 头文件包含
 
-#### 5.5.1 头文件的查找策略
+### 5.7 头文件包含 #include
 
--  < > 的查找策略：直接去标准路径下去查找。（如果仍然找不到，就提示编译错误）
+#### 5.7.1 头文件的查找策略
 
-- " " 的查找策略：先在源文件所在的目录下查找。如果该头文件未找到，则在库函数的头文件目录下查找。
+-  < > 的查找策略：直接去系统目录下查找。（如果仍然找不到，就提示编译错误）
+
+- " " 的查找策略：先在当前所处的工作目录（或文件名中指定的其他目录）查找。如果未找到再查找标准系统目录。
 
 > **linux标准头文件的路径:** /usr/include
 >
 > **VS环境**: C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\include
 
+```
+#include <stdio.h>       ← 查找系统目录
+#include "hot.h"         ← 查找当前工作目录
+#include "/usr/biff/p.h" ← 查找/usr/biff目录
+```
+
+> 注意：具体查找哪个目录取决于编译器的设定。有些编译器会搜索<font color='wildstrawberry'>源代码文件所在的目录</font>，有些编译器则搜索<font color='wildstrawberry'>当前的工作目录</font>，还有些搜索<font color='wildstrawberry'>项目文件所在的目录</font>
 
 
-#### 5.5.2 嵌套文件的包含
+
+#### 5.7.2 头文件内容
+
+- 明示常量——例如，stdio.h中定义的EOF、NULL和BUFSIZE（标准I/O缓冲区大小）。
+
+- 宏函数——例如，getc(stdin)通常用getchar()定义，而getc()经常用于定义较复杂的宏，头文件ctype.h通常包含ctype系列函数的宏定义。
+
+- 函数声明——例如，string.h头文件（一些旧的系统中是strings.h）包含字符串函数系列的函数声明。在ANSI C和后面的标准中，函数声明都是函数原型形式。
+
+- 结构模版定义——标准I/O函数使用FILE结构，该结构中包含了文件和与文件缓冲区相关的信息。FILE结构在头文件stdio.h中。
+
+- 类型定义——标准 I/O 函数使用指向 FILE 的指针作为参数。通常，stdio.h 用#define 或typedef把FILE定义为指向结构的指针。类似地，size_t和time_t类型也定义在头文件中。
+- 声明外部变量供其他文件共享  ` extern int status; // 在头文件中`
+
+
+
+
+
+#### 5.7.3 嵌套文件的包含
 
 ![image-20240807173214844](./C语言.assets/image-20240807173214844.png)
 
@@ -1198,6 +1328,22 @@ total = sum((int []){10,20},2);
 > 1. gets()不安全，会擦写现有数据
 > 2. fgets()安全，可通过while继续读取缓冲区数据，也可对溢出部分进行丢弃。
 > 3. gets_s()安全，
+
+
+
+### 3. _Generic泛型寻找表达式
+
+_Generic(x, int: 0, float: 1, double: 2, default: 3)
+
+> 第1个项是一个表达式，后面的每个项都由一个类型、一个冒号和一个值组成，如float: 1。
+>
+> 第1个项的类型匹配哪个标签，整个表达式的值是该标签后面的值。
+>
+> ​	例如，假设上面表达式中x是int类型的变量，x的类型匹配int:标签，那么整个表达式的值就是0。
+>
+> ​	如果没有与类型匹配的标签，表达式的值就是default:标签后面的值。
+>
+> 泛型选择语句与 switch 语句类似，只是前 者用表达式的类型匹配标签，而后者用表达式的值匹配标签。
 
 
 
