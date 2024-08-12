@@ -245,7 +245,6 @@ fork调用一次，返回两次。
 
 
 
-<<<<<<< Updated upstream
 #### 10.1.3 信号量
 
 信号量：一种用于不同进程间或同一个进程内不同线程间同步的原语。
@@ -411,166 +410,10 @@ struct sembuf {
 唤醒机制：
 	当线程 B 执行某个操作（如增加信号量的值）使得信号量值从 大于0 变为等于 0 时，操作系统会自动唤醒所有在等待该信号量为 0 的线程。
 	在这时，线程 A 被自动唤醒并继续执行。
-=======
-##### 2. 命名管道
-
-通过FIFO文件（也称命名管道）来进行不同进程间的通信。
-
-不同进程通过写入和读取相同FIFO文件进行通信。           `半双工通信，调用一次mkfifo函数，只生成一个管道（缓冲区）`
-
-
-
-**特点：**
-
-- FIFO文件位于文件系统中，可以像其他文件一样进行访问和管理。
-- FIFO文件可以通过文件名进行识别和引用，而不仅仅依赖于文件描述符。
-- FIFO文件可以在不同进程之间进行双向通信，允许同时进行读取和写入操作。
-
-
-
-```c
-// 1. 创建命名管道文件 FIFO文件
-int mkfifo(const char* pathname, mode_t mode);
-```
-
-**实现原理：**
-
-1.  进程通过调用`mkfifo函数`创建一个FIFO文件，FIFO文件对应一个fifo inode（底层和pipe inode实现相同）
-
-   ![image-20240809135022984](./unix环境编程.assets/image-20240809135022984.png)
-
-2. 进程调用`open函数`打开FIFO文件，由于每个文件都对应唯一的inode节点，所以每个进程打开的是相同的inode节点。
-3. 进程调用`write或read函数`来进行读写管道，实现进程间通信。
-
-<img src="./unix环境编程.assets/image-20240809135354503.png" alt="image-20240809135354503" style="zoom:80%;" />
-
-
-
-#### 10.1.2 System V消息队列
-
-它允许在同一系统上运行的不同进程之间传递消息。
-
-**优点：**
-
-- 可以实现独立的进程间通信，不受进程的启动和结束顺序的影响。
-- 允许多个进程同时向消息队列中写入和读取消息，实现了并发处理。
-- 通过消息优先级机制，可以优先处理重要的消息。
-
-
-
-**实现原理：**
-
-具有相同IPC命名空间的进程能**同时访问IPC命名空间相同内存空间**。
-
-![image-20240809143004516](./unix环境编程.assets/image-20240809143004516.png)
-
-
-
-```
-1. Key: 整数型，用来索引IPC对象（根据哈希表），检索成功返回标识ID；失败则创建IPC对象并返回标识ID。
-2. 标识ID：整数型，用来索引IPC对象（根据radix树），并不是由Key产生，而是由其他信息（如序号）通过算法产生。
-3. IPC对象：消息队列继承IPC对象，提供一些通用信息
-```
-
-![image-20240809144057314](./unix环境编程.assets/image-20240809144057314.png)
-
-3. Key的生成（三种）
-
-   - **第一种：**通过msgget()函数，使用一个随机整数，如：
-
-     ```c
-     /**
-     *	创建或获取一个System V消息队列描述符
-     *   arg： key 唯一标识一个消息队列，可取由ftok创建的key值或指定的一个非负整数值
-     *         msgflg 指定创建消息队列的权限和选项。
-     *                当使用IPC_CREAT | IPC_EXCL时，若消息队列不存在则创建，否则返回失败并设置erron标识为EEXIST
-     *   
-     *   return: 标识ID（成功）  失败返回-1，并设置errno
-     */
-     int msgget(key_t key, int msgflg);
-     ```
-
-     **msgget作用：**
-
-      	1. 通过Key查找IPC对象（消息队列）
-          - 查找成功 ，直接返回标识ID。说明Key已由IPC对象映射。
-          - 查找失败，说明Key对应的IPC对象未创建，需创建一个新的IPC对象。创建的新的IPC对象需根据序号信息生成一个标识ID，再根据标识ID插入radix树。
-      	2. 返回一个标识ID（msgid）	
-          - 后续进程间通信，通过标识ID查找消息队列进行通信
-
-   |      msgflg参数      | IPC对象存在 |        IPC对象不存在        |
-   | :------------------: | :---------: | :-------------------------: |
-   |          0           | 返回标识ID  |           返回-1            |
-   |      IPC_CREATE      | 返回标识ID  | 创建IPC对象，返回新的标识ID |
-   | IPC_CREATE\|IPC_EXEC |   返回-1    | 创建IPC对象，返回新的标识ID |
-
-   
-
-   
-
-   - **第二种：**通过msgget()函数，使用IPC_PRIVATE标识生成，只用于**亲缘关系的进程**
-
-     ```c
-     msgget(IPC_PRIVATE,0644)
-     ```
-
-     
-
-   - **第三种：**使用ftok()函数生成**（推荐）**
-
-     ```c
-     // 通过将pathname的i-node号和proj_id进行组合来生成一个唯一键值
-     // arg:    pathname：存在的路径名
-     //         proj_id：一个整数
-     // return: Key值（成功）  失败返回-1，并设置errno
-     key_t ftok(const char *pathname, int proj_id);
-     ```
-
-     
-
-##### 1. 发送消息 msgsnd
-
-将一个消息添加到指定的消息队列中
-
-```c
-/**
-*	arg: msqid 消息队列的标识ID
-*		 msgp 指向要发送的消息的指针
-* 		 msgsz 要发送的消息的大小。 是消息mtext数据长度
-*		 msgflg 控制发送消息的行为
-*   return:
-*        成功：返回实际发送消息的大小
-*        失败返回-1，并设置errno
-*/
-int msgsnd(int msqid, const void msgp[.msgsz], size_t msgsz, int msgflg);
-```
-
-```c
-struct msgbuf {
-      long mtype;       /* message type, must be > 0 */
-      char mtext[1];    /* message data 柔性数组*/   
-};
-```
-
-##### 2. 接收消息 msgrcv
-
-```c
-/**
-*	arg: msqid 消息队列的标识ID
-*		 msgp 指向接收消息的缓冲区
-* 		 msgsz 接收消息的最大长度。    为0表示接收队列中的第一个消息
-*		 msgflg 接收消息的行为，控制接收操作的行为
-*   return:
-*        成功：返回实际接收消息的长度
-*        失败返回-1，并设置errno
-*/
-int msgsnd(int msqid, const void msgp[.msgsz], size_t msgsz, int msgflg);
->>>>>>> Stashed changes
 ```
 
 
 
-<<<<<<< Updated upstream
 
 
 ###### 3. semctl()
@@ -843,39 +686,169 @@ int main(int args, char **argv)
 <img src="./unix环境编程.assets/image-20240811180237445.png" alt="image-20240811180237445" style="zoom: 50%;" />
 
 <img src="./unix环境编程.assets/image-20240811180438847.png" alt="image-20240811180438847" style="zoom: 50%;" />
-=======
-##### 3. 控制操作 msgctl
+
+##### 1. System V共享内存
+
+<img src="./unix环境编程.assets/image-20240812231308553.png" alt="image-20240812231308553" style="zoom:67%;" />
+
+###### 1. shmget()
+
+要使用共享内存，首先要创建一个共享内存区域。
 
 ```c
-/**
-*	arg: msqid 消息队列的标识ID
-*		 op 指定要执行的操作  
-*			- IPC_STAT：获取消息队列的状态
-*			- IPC_SET：设置消息队列的状态
-*			- IPC_RMID：删除消息队列
-*
-* 		 buf 指向一个结构体msqid_ds指针，用于传递或获取消息队列的属性信息
-*
-*   return:
-*        成功：IPC_STAT,IPC_SET
-*        失败：返回-1，并设置errno
+// 创建或打开一个共享内存。成功返回共享内存ID，失败返回-1   0666|IPC_CREAT（所有用户对它可读写，文件不存在，则创建它）
+/* 参数 
+	   key: 所创建或打开的共享内存的键值（16进制）
+       size:共享内存的大小（字节） （创建时生效）
+       shmflg:共享内存的访问权限（与文件权限一样）
+            IPC_CREAT 
+            IPC_EXCL 
+   返回值：当函数调用成功时，返回值为共享内存的引用标识符；调用失败时，返回值为 -1。
 */
-int msgctl(int msqid, int op, struct msqid_ds *buf);
+int shmget(key_t key,int size,int shmflg); 
 ```
 
-【使用示例】
+###### 2. shmat()
 
-```v
-// 1. 获取消息队列状态
-struct msqid_ds buf = {0};
-int msgctl(msqid, IPC_STAT, &buf);
+当一个共享内存创建或打开后，某个进程如果要使用该共享内存，则必须将这个共享内存区域附加到它的地址空间中。
 
-// 2. 设置消息队列的状态
-struct msqid_ds buf = {0};
-int msgctl(msqid, IPC_SET, &buf);
-
-// 3. 删除消息队列
-int msgctl(msqid, IPC_RMID, 0);
+```c
+// 把共享内存连接到进程的地址空间。成功返回映射到共享内存空间中的起始地址，失败返回NULL
+/*
+	 参数:
+        shmid: 要附加的共享内存区域的引用标识符
+        shmaddr:NULL 让系统自动选择一个合适的地址映射，将共享内存区域附加到第一块有效内存区域上，此时 flag 参数无效。
+                不为NULL， shmflg设定为SHM_RND 选择离给定地址最近的能够映射的地址进行映射，否则传递地址为4k的整数倍
+     返回值:
+     	- 成功，返回指向共享内存区域的指针
+     	- 失败，返回值为 -1。
+*/
+void *shmat(int shmid, const void *shmaddr,int shmflg); 
 ```
 
->>>>>>> Stashed changes
+###### 3. shmdt()
+
+当一个进程对共享内存区域的访问完成后，通过调用 shmdt 函数使共享内存区域与该进程的地址空间分离.（不删除共享内存本身）
+
+```c
+// 解除映射。返回值:成功返回0，失败返回-1 
+/*
+	参数:
+	   shmaddr:映射的地址   
+*/
+int shmdt(const void *shmaddr); 
+```
+
+###### 4. shmctl()
+
+```c
+// 对共享内存进行操作，比如创建、删除、获取和修改共享内存段的属性。 
+/*
+	参数:
+	   shmid: 共享内存的引用标识符
+       cmd: 调用该函数希望执行的操作 
+       		- SHM_LOCK：将共享内存区域上锁。
+			- IPC_RMID：用于删除共享内存。
+			- IPC_SET：按参数 buf 指向的结构中的值设置该共享内存对应的 shmid_ds 结构。
+ 			- IPC_STAT：用于取得该共享内存区域的 shmid_ds 结构，保存到 buf 指向的缓冲区。
+			- SHM_UNLOCK：将上锁的共享内存区域释放。
+       buf: 指向共享内存数据结构的指针，用于传递或接收共享内存的属性
+    返回值: - 不同的cmd参数，返回值不同 ，
+    	   - 失败返回-1，并设置errno
+*/
+int shmctl(int shmid, int cmd, struct shmid_ds *buf); 
+```
+
+```c
+// 记录了一个共享内存的各种属性
+struct shmid_ds {
+       struct ipc_perm shm_perm;    /* 所有者和权限 */
+       size_t          shm_segsz;   /* 以字节表示的共享内存区域的大小 */
+       time_t          shm_atime;   /* 最近一次附加操作的时间 */
+       time_t          shm_dtime;   /* 最近一次分离操作的时间 */
+       time_t          shm_ctime;   /* 最近一次改变的时间 */
+       pid_t           shm_cpid;    /* 创建该共享内存的进程 ID*/
+       pid_t           shm_lpid;    /* 最后一次调用shmat(2)/shmdt(2)的进程 */
+       shmatt_t        shm_nattch;  /* 当前使用该共享内存区域的进程数 */
+       ...
+};
+
+struct ipc_perm {
+       key_t          __key;    /* Key supplied to shmget(2) */
+       uid_t          uid;      /* Effective UID of owner */
+       gid_t          gid;      /* Effective GID of owner */
+       uid_t          cuid;     /* Effective UID of creator */
+       gid_t          cgid;     /* Effective GID of creator */
+       unsigned short mode;     /* Permissions + SHM_DEST and
+                                   SHM_LOCKED flags */
+       unsigned short __seq;    /* Sequence number */
+};
+```
+
+```
+>> ipcs -m           # 查看系统的共享内存
+>> ipcrm -m 共享内存id  # 手动删除
+```
+
+
+
+#### 10.1.5 消息队列
+
+##### 两者区别
+
+<img src="./unix环境编程.assets/image-20240812232234925.png" alt="image-20240812232234925" style="zoom: 67%;" />
+
+
+
+
+
+##### 2. Posix消息队列
+
+Posix消息队列是一种基于文件的消息队列，操作Posix消息队列就像操作文件一样简单。
+
+
+
+**实现原理：**
+
+Posix消息队列是基于mqueue文件系统的消息队列，Posix消息队列其实是mqueue文件系统中一个inode节点。
+
+> mqueue inode节点是基于红黑树存储数据的。
+
+```
+# 查看所有文件系统
+cat /proc/filesystems
+```
+
+<img src="./unix环境编程.assets/image-20240812232856541.png" alt="image-20240812232856541" style="zoom:50%;" />
+
+```
+# 查看mqueue文件系统挂载点，挂载路径为/dev/mqueue
+mount | grep "queue"
+```
+
+<img src="./unix环境编程.assets/image-20240812233021085.png" alt="image-20240812233021085" style="zoom: 50%;" />
+
+> 通过`mq_open函数`创建的消息队列文件都保存在`/dev/mqueue`目录下
+
+<img src="./unix环境编程.assets/image-20240812233259100.png" alt="image-20240812233259100" style="zoom: 50%;" />
+
+
+
+```c
+mqd_t mq_open(const char *name, int oflag);
+mqd_t mq_open(const char *name, int oflag, mode_t mode, struct mq_attr *attr);
+```
+
+
+
+```
+// 消息队列属性
+struct mq_attr {
+       long mq_flags;       /* Flags (ignored for mq_open()) */
+       long mq_maxmsg;      /* 消息队列最大消息个数 */
+       long mq_msgsize;     /* 单个消息最大字节数 (bytes) */
+       long mq_curmsgs;     /* 消息队列当前消息个数
+                               (ignored for mq_open()) */
+};
+```
+
