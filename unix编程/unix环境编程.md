@@ -798,13 +798,34 @@ struct ipc_perm {
 
 <img src="./unix环境编程.assets/image-20240812232234925.png" alt="image-20240812232234925" style="zoom: 67%;" />
 
+**<font color='red'>主要区别：</font>**
+
+- 对<font color='red'>Posix消息队列</font>的<font color='red'>**读**总是返回最高优先级的最早信息</font>，对<font color='red'>System V消息队列</font>的<font color='red'>**读**则可以返回任意指定优先级的消息</font>。
+- 当往一个空队列**<font color='red'>放置</font>**一个消息时，Posix消息队列则<font color='red'>允许产生一个信号或启动一个线程</font>，而System V消息队列则不提供此类机制。
 
 
 
-
-##### 2. Posix消息队列
+##### 2. Posix消息队列（随内核持续性）
 
 Posix消息队列是一种基于文件的消息队列，操作Posix消息队列就像操作文件一样简单。
+
+<img src="./unix环境编程.assets/image-20240813215809761.png" alt="image-20240813215809761" style="zoom:67%;" />
+
+> 每个消息具有的属性：
+>
+> - 一个无符号整数优先级（Posix）
+> - 消息的数据长度
+> - 数据
+
+```
+// 消息队列属性
+struct mq_attr {
+       long mq_flags;       /* Flags (ignored for mq_open()) */
+       long mq_maxmsg;      /* 消息队列最大消息个数 */
+       long mq_msgsize;     /* 单个消息最大字节数 (bytes) */
+       long mq_curmsgs;     /* 消息队列当前消息个数 (ignored for mq_open()) */
+};
+```
 
 
 
@@ -832,23 +853,117 @@ mount | grep "queue"
 
 <img src="./unix环境编程.assets/image-20240812233259100.png" alt="image-20240812233259100" style="zoom: 50%;" />
 
+###### 1. mq_open()
 
+创建或打开一个消息队列。
 
 ```c
+/**
+*	
+*	参数：
+*		- name：标识消息队列，以“/”开头的名字，如“/temp.txt”
+*		- oflag：O_RDONLY、O_WRONLY或O_RDWR，可按位或上O_CREAT、O_EXCL或O_NONBLOCK。
+*		- mode：创建一个新的队列时，mode和attr参数是需要的。并且与open()一样，mode中的值会与进程的umask取掩码。
+*		- attr：给新队列指定某些属性。如果它为空指针，那使用默认属性。
+*	返回值：
+*		- 成功，返回消息队列描述符
+*		- 失败，-1
+*/
 mqd_t mq_open(const char *name, int oflag);
 mqd_t mq_open(const char *name, int oflag, mode_t mode, struct mq_attr *attr);
 ```
 
+<img src="./unix环境编程.assets/image-20240813230915113.png" alt="image-20240813230915113" style="zoom: 67%;" />
 
 
+
+###### 2. mq_close()
+
+关闭已打开的消息队列的描述符，调用进程可以不再使用该描述符，<font color='red'>但其消息队列并不从系统中删除。</font>
+
+一个进程终止时，它的所有打开着的消息队列描述符都会被关闭，就像调用了mq_close一样。
+
+> **fork()、exec()以及进程终止对消息队列描述符的影响**
+>
+> 在fork()中子进程会复制其父进程的消息队列描述符的副本，并且这些描述符会引用同样的打开着的消息队列描述。
+>
+> 子进程不会继承其父进程的任何消息通知注册。
+>
+> 当一个进程执行了一个exec()或终止时，所有其打开的消息队列描述符会被关闭。关闭消息队列描述符的结果是进程在相应队列上的消息通知会被注销。
+
+```c
+int mq_close(mqd_t mqdes);
 ```
-// 消息队列属性
+
+如果调用进程已经通过mqdes在队列上注册了消息通知，那么通知注册会自动被删除，并且另一个进程可以随后向该队列注册消息通知。
+
+
+
+
+
+###### 3. mq_unlink()
+
+要从系统中删除**通过name标识的**消息队列**，并将队列标记为在所有进程使用完该队列之后销毁该队列。**
+
+> 每个消息队列都有一个保存其当前打开着文件描述符的引用计数器。
+
+```c
+int mq_unlink(const char *name);
+```
+
+<font color='red'> mq_close()并不会删除消息队列，mq_unlink()才会删除消息队列。</font>
+
+
+
+
+
+
+
+**【消息队列特性】**
+
+```c
 struct mq_attr {
-       long mq_flags;       /* Flags (ignored for mq_open()) */
-       long mq_maxmsg;      /* 消息队列最大消息个数 */
-       long mq_msgsize;     /* 单个消息最大字节数 (bytes) */
-       long mq_curmsgs;     /* 消息队列当前消息个数
-                               (ignored for mq_open()) */
+　　long mq_flags;   --消息队列flag[mq_getattr(), mq_setattr()]
+　　long mq_maxmsg;  --定义了使用mq_send()向消息队列上添加消息数量上限，必须大于0。mq_open()时确定，后面无法修改。[mq_open(), mq_getattr()]
+　　long mq_msgsize; --定义了加入详细队列的每条消息的大小上限，必须大于0。mq_open()时确定，后面无法修改。[mq_open(), mq_getattr()]
+　　long mq_curmsgs; --当前消息队列中消息数目[mq_getattr()]
 };
 ```
 
+###### 4. mq_getattr()
+
+返回一个包含与描述符mqdes相关联的消息队列的相关信息mq_attr结构。
+
+```c
+int mq_getattr(mqd_t mqdes, struct mq_attr *attr);
+```
+
+mq_flags取值只有一个O_NONBLOCK，这个标记是mq_open()的oflag参数来初始化的，并且使用mq_setattr()可以修改这个标记。 
+
+###### 5. mq_setattr()
+
+设置与mqdes相关的详细队列描述符的特性
+
+```c
+int mq_setattr(mqd_t mqdes, const struct mq_attr *newattr, struct mq_attr *oldattr);
+```
+
+- 使用 newattr中ma_flags字段来修改mqdes相关联消息队列描述的标记。
+
+- 如果oldattr不为NULL，那么就返回一个之前消息特性的mq_attr结构。
+
+- SUSv3规定使用mq_setattr()能够修改的唯一特性是O_NONBLOCK标记的状态。
+
+
+
+**【交换信息】**
+
+###### 6. mq_send()
+
+将位于msg_ptr指向的缓冲区中的消息添加到描述符mqdes所引用的消息队列中。
+
+```c
+int mq_send(mqd_t mqdes, const char *msg_ptr, size_t msg_len, unsigned int msg_prio);
+```
+
+https://www.cnblogs.com/arnoldlu/p/12394140.html
