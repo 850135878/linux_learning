@@ -4,6 +4,12 @@
 
 https://datatracker.ietf.org/doc/html/rfc1350
 
+
+
+sudo sysctl -w vm.drop_caches=3
+
+
+
 # TFTP
 
 TFTP （Trivial File Transfer Protocol）简单文件传输协议。

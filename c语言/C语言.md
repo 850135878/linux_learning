@@ -643,8 +643,6 @@ puts(ps);   // beast
 puts(copy); // Be the beast
 ```
 
-
-
 - **strncpy()** <font color='red'>慎用</font>
 
 将字符串src中的count个字符拷贝到字符串dest中去，返回指向dest的指针。
