@@ -45,6 +45,8 @@ struct passwd *getpwuid(uid_t uid);
 
 
 
+
+
 #### 1.1.2 创建子进程
 
 ##### 1. fork
@@ -165,6 +167,10 @@ int execvp(const char *file,char *const argv[])：
 
 守护进程是在后台运行的，不会占着终端，终端可以执行其他命令。
 
+通常保存在/etc/rc.d/init.d目录下
+
+![image-20240818232219357](./面向Linux的C编程.assets/image-20240818232219357.png)
+
 
 
 比如，linux下的`init` 是系统守护进程，它负责启动各运行层次特定的系统服务，所以很多进程的 PPID 是 `init`，并且这个 `init` 也负责收养孤儿进程。
@@ -180,6 +186,8 @@ ps -elf
 
 ![image-20240802102800584](./面向Linux的C编程.assets/image-20240802102800584.png)
 
+
+
 大多数守护进程都是以超级用户特权运行的，守护进程没有控制终端，`TTY` 这列显示的是 `?`
 
 - 内核守护进程以无控制终端方式启动
@@ -187,10 +195,23 @@ ps -elf
 
 
 
+**超级守护进程：**
+
+​		系统启动时，由一个统一的守护进程xinet来负责管理一些进程。当外界有要求的，需要通过xinet的转接才可以唤醒被xinet管理。
+
+优点：最初只有xinet守护进程占用资源，其他的内服务并不一直占系统资源，只有请求到来时服务进程才会被唤醒。
+
+
+
 **守护进程的创建思想：**
 
 - 父进程创建一个子进程  `fork()`
 - 子进程杀死父进程  `kill(getppid(),SIGTERM)`
+- setid()创建一个新会话，让进程摆脱原会话、原进程组、源控制终端的控制
+- 改变当前目录，根目录`/`：chdir("/")
+- 重设文件权限掩码 `umask(0)`
+- 关闭文件描述符。for(i=0;i<MAXFILE;i++) close(i);
+- 守护进程退出处理 `信号处理`
 - 信号处理所有的工作由子进程来处理
 
 ```c
@@ -818,6 +839,52 @@ void siglongjmp(sigjmp_buf env,int val);
 ```
 
 
+
+### 4.3 程序跳转
+
+#### 4.3.1 sigsetjmp/siglongjmp 函数
+
+​		调用该函数会保存目前堆栈环境，然后将目前的地址作一个记号，而在程序其他地方调用siglongjmp()时便会直接跳到这个记号位置，然后还原堆栈，继续程序的执行。
+
+```c
+#include <setjmp.h>
+
+/**
+*	- env: 用来保存目前堆栈环境，一般声明为全局变量
+*   - savesigs: 若非0，则代表搁置的信号集合也会一块保存
+*	返回值:
+*		0为第一次调用，非0表示由siglongjmp()跳转来的。
+*/
+int sigsetjmp(sigjmp_buf env, int savesigs);
+```
+
+```
+#define sigjmp_buf jmp_buf         //为了兼容在win下的编译设置的宏
+#define sigsetjmp(env, savemask) setjmp(env)
+#define siglongjmp(env, val) longjmp(env, val)
+```
+
+
+
+#### 4.3.2 setjmp/longjmp 函数
+
+​		非局部跳转语句---setjmp和longjmp函数。非局部指的是，这不是由普通C语言goto语句在一个函数内实施的跳转，而是在栈上跳过若干调用帧，返回到当前函数调用路径上的某一个函数中。
+
+```c
+#include <setjmp.h>
+/**
+*  - env: 类型jmp_buf是某种形式的数组，其中存放在调用longjmp时能用来恢复栈状态的所有信息
+*/
+int setjmp(jmp_buf env);
+Void longjmp(jmp_buf env,int val);
+```
+
+setjmp和longjmp要注意以下几点：
+　　1、setjmp与longjmp结合使用时，它们必须有严格的先后执行顺序，也即先调用setjmp函数，之后再调用longjmp函数，以恢复到先前被保存的“程序执行点”。否则，如果在setjmp调用之前，执行longjmp函数，将导致程序的执行流变的不可预测，很容易导致程序崩溃而退出。
+　   2、不要假设寄存器类型的变量将总会保持不变。在调用longjmp之后，通过setjmp所返回的控制流中，程序中寄存器类型的变量将不会被恢复。寄存器类型的变量，是指为了提高程序的运行效率，变量不被保存在内存中，而是直接被保存在寄存器中。寄存器类型的变量一般都是临时变量，在C语言中，通过register定义，或直接嵌入汇编代码的程序。这种类型的变量。
+       longjmp必须在setjmp调用之后，而且longjmp必须在setjmp的作用域之内。**具体来说，在一个函数中使用setjmp来初始化一个全局标号，然后只要该函数未曾返回，那么在其它任何地方都可以通过longjmp调用来跳转到 setjmp的下一条语句执行。**实际上setjmp函数将发生调用处的局部环境保存在了一个jmp_buf的结构当中，只要主调函数中对应的内存未曾释放 （函数返回时局部内存就失效了），那么在调用longjmp的时候就可以根据已保存的jmp_buf参数恢复到setjmp的地方执行。
+
+​        
 
 
 
