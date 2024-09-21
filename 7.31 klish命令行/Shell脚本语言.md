@@ -12,6 +12,14 @@ shell 既是<font color='red'>应用程序 </font>又是一种<font color='red'>
 
 <img src="./Shell脚本语言.assets/image-20240801231604217.png" alt="image-20240801231604217" style="zoom:80%;" />
 
+查看当前可用shell
+
+```bash
+cat /etc/shells
+```
+
+<img src="./Shell脚本语言.assets/image-20240920100222222.png" alt="image-20240920100222222" style="zoom: 80%;" />
+
 ## 1. Shell命令解释器
 
 - sh

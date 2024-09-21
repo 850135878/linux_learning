@@ -4,22 +4,22 @@
 
 ## 1.1 模块概述
 
-​		根据《klish新增需求设计说明》中，命令行使用的需求和说明文档规范，整理klish命令行的使用方法，合入《简单xml命令实现说明》的一些用法说明，全面的描述命令行使用时的注意事项和书写规范。
+​	根据《klish新增需求设计说明》中，命令行使用的需求和说明文档规范，整理klish命令行的使用方法，合入《简单xml命令实现说明》的一些用法说明，全面的描述命令行使用时的注意事项和书写规范。
 
 ## 1.2 文档描述
 
-针对目前使用的主要cmd命令，提供了案例和使用方法，书写cmd命令时可以作为参考，文章主要是第三章的说明。
+​	针对目前使用的主要cmd命令，提供了案例和使用方法，书写cmd命令时可以作为参考，文章主要是第三章的说明。
 
 第三章描述klish的功能使用方法；
 
 ## 1.3 术语说明
 
-Klish: Kommand Line Interface Shell，是一个在 Unix 系统上实现了 Cisco 方式的命令行接口的框架，可通过XML进行配置，是 clish 的衍生版本。
+​	Klish: Kommand Line Interface Shell，是一个在 Unix 系统上实现了 Cisco 方式的命令行接口的框架，可通过XML进行配置，是 clish 的衍生版本。
 
-- 标签：本文的标签，是指被‘< >’和‘< />’符号包括在内的部分，在html和xml使用中，有时也被称作元素，本文统一称为标签；例如<PARAM name="control_select" help="" ptype="SUBCOMMAND" mode="switch"/>，称为PARAM标签。
+- 标签：本文的标签，是指被‘< >’和‘< />’符号包括在内的部分，在html和xml使用中，有时也被称作元素，本文统一称为标签；例如`<PARAM name="control_select" help="" ptype="SUBCOMMAND" mode="switch"/>`，称为PARAM标签。
 
 
-- 字段：也称为属性，指标签的‘< >’括号内定义的不同属性字段，例如<PARAM name="control_select" help="" ptype="SUBCOMMAND" mode="switch">中，我们称name为PARAM标签的一个属性字段，同理help、ptype、mode等都是PARAM标签的属性字段。
+- 字段：也称为属性，指标签的‘< >’括号内定义的不同属性字段，例如`<PARAM name="control_select" help="" ptype="SUBCOMMAND" mode="switch">`中，我们称name为PARAM标签的一个属性字段，同理help、ptype、mode等都是PARAM标签的属性字段。
 
 
 # 2. 参考文献
@@ -35,7 +35,7 @@ Klish: Kommand Line Interface Shell，是一个在 Unix 系统上实现了 Cisco
 
 ## 3.1 准备工作
 
-Klish命令行实现需要两个文件：用来实现klish命令行输入的**<font color='red'>xml文件</font>**、用来解析klish命令的命令行**<font color='red'>解析进程文件</font>**。
+​	Klish命令行实现需要两个文件：用来实现klish命令行输入的**<font color='red'>xml文件</font>**、用来解析klish命令的命令行**<font color='red'>解析进程文件</font>**。
 
 ![image-20240731123223294](./klish命令行使用说明.assets/image-20240731123223294.png)
 
@@ -47,21 +47,21 @@ Xml文件用来定义命令行格式，添加新的命令，定义视图格式�
 
 #### 3.1.1.2 存放路径
 
-xml文件放在`各自模块文件夹`，需要在cmake文件中指明安装路径，例如`hal.xml/hal_mac.xml/hal_qos.xml`等命令行实现文件，放到`${SWITCH_BASE}/user/local/hal文件夹`下，可以另建一个子文件夹，也可以共用根目录。 
+​	xml文件放在**`各自模块文件夹`**，需要在cmake文件中指明安装路径，例如`hal.xml/hal_mac.xml/hal_qos.xml`等命令行实现文件，放到`${SWITCH_BASE}/user/local/hal文件夹`下，可以另建一个子文件夹，也可以共用根目录。 
 
-对于xml文件，需要安装到系统的<font color='red'>**固定路径/usr/share/klish/文件夹**</font>下，书写时，可以使用全局环境宏变量‘KLISHXML’，例如：install(FILES device-config-olt.xml DESTINATION $ENV{KLISHXML})。
+​	对于xml文件，需要安装到系统的<font color='red'>**固定路径: /usr/share/klish/文件夹**</font>下，书写时，可以使用全局环境宏变量‘KLISHXML’，例如：install(FILES device-config-olt.xml DESTINATION $ENV{KLISHXML})。
 
 ### 3.1.2 C文件说明
 
 #### 3.1.2.1 功能描述
 
-<font color='wildstrawberry'>c文件生成的appname</font>，作为<font color='wildstrawberry'>xml中的命令行的ACTION标签的脚本部分</font>，需要**保证名字一致**，而<font color='wildstrawberry'>c文件生成的可执行文件</font>正好是<font color='wildstrawberry'>shell需要启动并解析命令的进程</font>，文件由各个模块自己管理。
+​	<font color='wildstrawberry'>.c文件生成的appname</font>，作为<font color='wildstrawberry'>xml中的命令行的ACTION标签的脚本部分</font>，需要**保证名字一致**，而<font color='wildstrawberry'>.c文件生成的可执行文件</font>正好是<font color='wildstrawberry'>shell需要启动并解析命令的进程</font>，文件由各个模块自己管理。
 
 ## 3.2 xml格式
 
 ![image-20240731130000119](./klish命令行使用说明.assets/image-20240731130000119.png)
 
-以创建vlan为例简单介绍xml命令的各个常用标签。
+​	以创建vlan为例，简单介绍xml命令的各个常用标签。
 
 ### 3.2.1 VIEW标签
 
@@ -93,7 +93,7 @@ VIEW标签下可以包含的子标签有：
 
   `prompt="${SYSTEM_NAME}(config)#"`     `SYSTEM_NAME 代表hostname`
 
-- **depth：**嵌套视图深度，默认为0；它与[CONFIG]标签一起使用。 如果必须将命令写入配置，则视图的深度将在指定命令缩进，当前VIEW中的所有命令具有相同的深度，默认为0，目前不使用；
+- **depth：**嵌套视图深度，默认为0；它与[CONFIG]标签一起使用。 如果必须将命令写入配置，则视图的深度将在指定命令缩进，当前VIEW中的所有命令具有相同的深度，默认为0，**目前不使用；**
 
 - **restore：**执行该视图命令恢复该视图方式，默认为none，值还有view、depth；
 
@@ -124,7 +124,7 @@ VIEW标签下可以包含的子标签有：
 
 #### 3.2.2.1 功能描述
 
-COMMAND标签主要用来**定义命令**，如果定义的命令需要使用命令级别和用户权限功能，相关模块需要把命令加入到privilege.xml的可配置权限参数中。
+​	COMMAND标签主要用来**定义命令**，如果定义的命令需要使用命令级别和用户权限功能，相关模块需要把命令加入到privilege.xml的可配置权限参数中。
 
 
 
@@ -235,7 +235,7 @@ COMMAND标签主要用来**定义命令**，如果定义的命令需要使用命
 
   ![view](./klish命令行使用说明.assets/view.png)
 
-- **access：**命令执行权限。 如果访问被拒绝，则用户将无法使用命令；`目前本字段没有被使用，都是使用另一套命令级别和用户权限实现的；`
+- **access：**命令执行权限。 如果访问被拒绝，则用户将无法使用命令；**`目前本字段没有被使用，都是使用另一套命令级别和用户权限实现的；`**
 
 - **args：**命令后跟自定义的参数的名字，参数可以任意长度和格式，可以有空格；
 
@@ -301,7 +301,7 @@ PARAM可以配置的字段和作用如下：
 
 - **help：帮助信息；**
 
-- **ptype：数据类型，需要<font color='red'>引用已经定义好的ptype</font>**（注：如果ptype设置的为自定义数字类型如VLAN_ID/UINT等，注意mode不要设置为subcommand类型，不设置或者设置为command类型即可，否则会报错）；
+- **ptype：数据类型，需要<font color='red'>引用已经定义好的ptype</font>**（注：如果ptype设置的为自定义数字类型如VLAN_ID/UINT等，注意mode不要设置为subcommand类型，可以不设置或者设置为command类型即可，否则会报错）；
 
   <img src="./klish命令行使用说明.assets/屏幕截图 2024-07-31 143721.png" alt="屏幕截图 2024-07-31 143721" style="zoom:80%;" />
 
@@ -310,7 +310,7 @@ PARAM可以配置的字段和作用如下：
 - **mode：参数模式。**
 
   - common：普通参数的标准模式   默认为`common`
-  - subcommand：该子命令通过其“name”（若有指定，也可为“value”字段）来识别，可用作可选标志或用于switch分支。若子命令被使用，那么该参数的值就是其名称（若有指定“值”字段，则为该字段的值）。若参数是可选的且未被使用，那么该参数的值未定义。
+  - subcommand：该子命令**通过其“name”（若有指定，也可为“value”字段）来识别**，可用作可选标志或用于switch分支。若子命令被使用，那么该参数的值就是其名称（若有指定“值”字段，则为该字段的值）。若参数是可选的且未被使用，那么该参数的值未定义。
   - **switch：在多个子参数中选择一个**
 
 - prefix：前缀；

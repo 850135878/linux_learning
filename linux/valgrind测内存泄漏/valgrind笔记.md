@@ -101,7 +101,15 @@ valgrind能检测内存主要依赖于其两个全局表——Value表和Address
 --xml=yes                	 # 将以 xml 格式输出，只有 memcheck 可用。
 ```
 
+```
+valgrind --tool=memcheck --leak-check=full --show-reachable=yes  ./bin/client/client
+```
 
+```
+valgrind --tool=memcheck --leak-check=full --show-reachable=yes  ./bin/serv
+```
+
+valgrind --tool=memcheck --leak-check=full --show-reachable=yes mytftpd
 
 #### 2.3.1 输出分析
 
