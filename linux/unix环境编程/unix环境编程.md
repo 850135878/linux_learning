@@ -38,6 +38,45 @@
 
 
 
+## 高级I/O
+
+### 非阻塞I/O
+
+设置非阻塞I/O的两者方式
+
+```c
+//第一种方式，open打开文件时，指定O_NONBLOCK标识
+int open(const char *pathname, int flags, ... /* mode_t mode */ );
+
+//第二种方式，fcntl设置O_NONBLOCK文件状态标识
+int fcntl(int fd, int op, ... /* arg */ );
+```
+
+### 记录锁
+
+#### fcntl记录锁
+
+> 该函数允许对文件内**任意字节数的区域**加锁，长至整个文件，短至文件中的某个字节。
+
+```c
+// 第二个cmd参数：F_GETLK、F_SETLK或F_SETLKW。
+int fcntl(int fd, int op, ... /* struct flock *flockptr */ );
+```
+
+```c
+struct flock {
+    ...
+    short l_type;    /* Type of lock: F_RDLCK（共享锁）, F_WRLCK（独占性写锁）, F_UNLCK（解锁一个区域） */
+    short l_whence;  /* How to interpret l_start: SEEK_SET, SEEK_CUR, SEEK_END */
+    off_t l_start;   /* Starting offset for lock */
+    off_t l_len;     /* Number of bytes to lock */
+    pid_t l_pid;     /* PID of process blocking our lock (set by F_GETLK and F_OFD_GETLK) */
+    ...
+};
+```
+
+
+
 ## 第7章 进程环境
 
 ### 7.1 进程终止
@@ -629,5 +668,86 @@ pthread_rwlockattr_init(&attr);
 pthread_rwlockattr_setkind_np(&attr,PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
 // 初始化读写锁
 pthread_rwlock_init(&rwlock, &attr);
+```
+
+
+
+
+
+### 13. 信号
+
+#### 信号集操作
+
+> 有一个能表示多个信号（信号集）的数据类型。
+
+```c
+// 初始化一个信号集，删除所有的信号
+int sigemptyset(sigset_t *set);
+// 初始化一个信号集，使其包含所有信号
+int sigfillset(sigset_t *set);
+// 向信号集中添加/删除指定信号
+int sigaddset(sigset_t *set, int signum);
+int sigdelset(sigset_t *set, int signum);
+// 向信号集中信号是否存在
+int sigismember(const sigset_t *set, int signum);
+```
+
+
+
+#### sigprocmask
+
+设置阻塞信号集，用于确保进程在处理某些操作时不被信号打断。 <font color='red'>  **仅为单线程进程定义的。**</font>
+
+> 用于改变当前进程的信号屏蔽字，它可以**阻塞或解除阻塞**特定的信号。  **阻塞信号集**
+
+```c
+/**
+*	- how: 指定操作（如SIG_BLOCK、SIG_UNBLOCK或SIG_SETMASK）
+* 		    SIG_BLOCK: 将set中的信号添加到当前进程的信号屏蔽字中(添加阻塞信号操作)
+*			SIG_UNBLOCK：从当前信号屏蔽字中移除set中的信号(解除阻塞信号操作)
+*			SIG_SETMASK：将当前信号屏蔽字设置为set中定义的信号集，替换之前的信号屏蔽字
+* 			      		 一般使用这个字段，并使用oldset，来代替SIG_UNBLOCK来说取消对信号的阻塞。
+*	- set: 要修改的信号集
+*   - oldset: 用于保存先前的信号屏蔽字
+*/
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
+```
+
+
+
+#### sigpending
+
+用于检查当前进程尚未处理的信号（获取**未决信号集**）
+
+```c
+int sigpending(sigset_t *set);
+```
+
+
+
+#### sigaction
+
+用于更改进程对特定信号的处理方式。检查或修改（检查并修改）与指定信号相关联的处理动作。
+
+```c
+int sigaction(int signum,
+                     const struct sigaction *_Nullable restrict act,
+                     struct sigaction *_Nullable restrict oldact);
+```
+
+```c
+struct sigaction {
+  void (*sa_handler)(int); // 信号处理函数指针。如果设置为SIG_IGN，则忽略该信号；如果设置为SIG_DFL，则恢复默认处理。
+  
+  // 指向更复杂的信号处理函数的指针，能够接收额外的参数，包括信号编号、信号信息和上下文指针。
+  // 使用此字段时，sa_flags 必须设置为 SA_SIGINFO。
+  void (*sa_sigaction)(int, siginfo_t *, void *);
+  sigset_t sa_mask; // 在信号处理程序执行期间要屏蔽的信号集。处理程序执行时，指定的信号将被阻塞，以防止信号中断当前处理过程。
+  
+  // 指定信号处理的行为标志。
+  // SA_RESTART：自动重新启动被信号中断的系统调用。SA_SIGINFO：使用 sa_sigaction 而非 sa_handler 进行处理
+  int sa_flags; 
+  void (*sa_restorer)(void); // 在一些系统中用于恢复旧的信号处理状态，通常设置为 NULL
+};
 ```
 
