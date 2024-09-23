@@ -2,7 +2,7 @@
 
 ## 第3章 文件I/O
 
-> 常用的5种I/O函数：open、read、write、lseek和close。
+> 常用的5种I/O函数：open、read、write、lseek和close。 都是<font color='red'>无缓冲I/O，即每次调用都是调用内核中的一个系统调用</font>。
 
 ### 3.1 文件描述符
 
@@ -12,25 +12,141 @@
 
 创建时机：打开一个现有文件或新建文件时，内核会向进程返回一个文件描述符。
 
-三种标准输入、标准输出以及标准错误：**STDIN_FILENO（0）、STDOUT_FILENO（1）、STDERR_FIFENO（2）**
+UNIX中shell的三种标准输入、标准输出以及标准错误：**STDIN_FILENO（0）、STDOUT_FILENO（1）、STDERR_FIFENO（2）**
 
-
+> 每个进程最多打开63个文件。
+>
 
 ### 3.3 文件I/O相关的各种函数
 
 #### 3.3.1 open和openat
 
+打开或创建一个文件，返回一个最小的未使用的文件描述符。
 
+```c
+/**
+* flags: O_RDONLY、O_WDONLY、O_RDWR、O_EXEC（只执行）、O_SEARCH（只搜索打开，应用于目录）
+*/
+int open(const char *pathname, int flags);
+// 只有当打开的文件不存在时，使用第三个参数
+int open(const char *pathname, int flags, mode_t mode);
+
+// 若path是绝对路径，则忽略dirfd，相当于open函数；
+// 若path是相对路径，则dirfd指出了相对路径名在文件系统中的开始地址。dirfd是通过打开相对路径名所在的目录获取的。
+int openat(int dirfd, const char *pathname, int flags);
+int openat(int dirfd, const char *pathname, int flags, mode_t mode);
+```
+
+ 
 
 #### 3.3.2 creat
 
+```c
+ int creat(const char *pathname, mode_t mode);
+```
+
+等价于：
+
+```c
+open(pathname, O_WDONLY | O_CREAT | O_TRUNC, mode);
+```
+
 #### 3.3.3 close
+
+关闭一个文件时，会释放该进程对该文件上的所有记录锁。
+
+```c
+int close(int fd);
+```
 
 #### 3.3.4 lseek
 
+为一个打开的文件设置偏移量，返回新的文件偏移量。
+
+```c
+off_t lseek(int fd, off_t offset, int whence);
+```
+
+whence参数值：
+
+- SEEK_SET：将该文件的偏移量设置为距文件开始处offset个字节。
+- SEEK_CUR：将该文件的偏移量设置为其当前值+offset。
+- SEEK_END：将该文件的偏移量设置为文件长度+offset。
 
 
 
+#### 3.3.5 pread
+
+相当于调用完lseek后，再调用read，**原子操作**。
+
+```c
+ssize_t pread(int fd, void *buf, size_t count, off_t offset);
+```
+
+#### 3.3.6 pwrite
+
+相当于调用完lseek后，再调用write，**原子操作**。
+
+```c
+ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset);
+```
+
+
+
+#### 3.3.7 dup和dup2
+
+复制一个文件描述符，函数返回的文件描述符和旧的文件描述符指向同一个文件表项。
+
+```c
+int dup(int oldfd);
+int dup2(int oldfd, int newfd);
+```
+
+#### 3.3.8 fcntl
+
+```c
+int fcntl(int fd, int cmd, ... /* arg */ );
+```
+
+- F_DUPDF或F_DUPFD_CLOEXEC：复制一个文件描述符
+- F_GETFD或F_SETFD：获取或设置一个文件描述符
+- F_GETFL或F_SETFL：获取或设置文件状态标志
+- F_GETOWN或F_SETOWN：获取或设置异步I/O所有权
+- F_GETLK、F_SETLK或F_SETLKW：获取或设置记录锁
+
+```bash
+#  文件状态标识表
++----------------+-------------------------+----------------------------+
+|  Flag          |  Description             |  Value                      |
++----------------+-------------------------+----------------------------+
+|  O_RDONLY      |  Read-only mode          |  0                          |
++----------------+-------------------------+----------------------------+
+|  O_WRONLY      |  Write-only mode         |  1                          |
++----------------+-------------------------+----------------------------+
+|  O_RDWR        |  Read and write mode     |  2                          |
++----------------+-------------------------+----------------------------+
+|  O_APPEND      |  Append mode             |  Always append data at end  |
++----------------+-------------------------+----------------------------+
+|  O_CREAT       |  Create file if it doesn't exist | Create if missing    |
++----------------+-------------------------+----------------------------+
+|  O_EXCL        |  Exclusive creation      |  Fail if file exists        |
++----------------+-------------------------+----------------------------+
+|  O_TRUNC       |  Truncate file           |  Empty file if it exists    |
++----------------+-------------------------+----------------------------+
+|  O_NONBLOCK    |  Non-blocking mode       |  Operations return immediately |
++----------------+-------------------------+----------------------------+
+|  O_SYNC        |  Synchronous writes      |  Write operations wait for complete disk write |
++----------------+-------------------------+----------------------------+
+|  O_DSYNC       |  Data integrity writes   |  Wait for data but not metadata |
++----------------+-------------------------+----------------------------+
+|  O_RSYNC       |  Read synchronization    |  Read waits for synchronous writes |
++----------------+-------------------------+----------------------------+
+|  O_NOFOLLOW    |  No follow symbolic link |  Do not follow symlinks     |
++----------------+-------------------------+----------------------------+
+|  O_CLOEXEC     |  Close on exec           |  Close file descriptor on exec() |
++----------------+-------------------------+----------------------------+
+
+```
 
 
 
