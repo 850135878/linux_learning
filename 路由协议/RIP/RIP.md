@@ -1403,7 +1403,7 @@ rip2PeerVersion OBJECT-TYPE
 
 记录从特定RIP邻居接收到的**无效RIP响应数据包**的数量
 
-> 这些无效数据包可能由于格式错误、不符合协议规范或包含错误信息等原因被丢弃。
+> 这些无效数据包可能由于格式错误、不符合协议规范或包含错误信息等原因被丢弃。`端口未UP`
 
 ```c
 rip2PeerRcvBadPackets OBJECT-TYPE
