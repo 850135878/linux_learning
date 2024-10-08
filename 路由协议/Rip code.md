@@ -1,5 +1,14 @@
 # RIP代码
 
+```
+  1. RIP RFC，包括MIB brower，读取mib节点
+  2. rip和cisco模拟器做互通性实验；
+  3. 走读代码，并在组内做rip模块介绍
+  4. 对照入网测试文档，移动入围测试文档，自己尝试写测试用例，做测试设计，并进行测试。
+```
+
+
+
 <img src="./Rip code.assets/image-20240926165142493.png" alt="image-20240926165142493" style="zoom: 50%;" />
 
 ## 预编译指令
@@ -103,7 +112,33 @@ struct MESSAGE_PARAM
 };
 ```
 
+### route_table
 
+```c
+struct route_table{
+	struct route_node *top;
+}
+```
+
+### route_node
+
+```c
+struct route_node{
+	struct prefix p;
+	struct route_table *table;
+	struct route_node *parent;
+	struct route_node *link[2];
+#define l_left link[0];
+#define r_right link[1];
+	unsigned int lock;
+	void *info;
+	void *aggregate;
+}
+```
+
+
+
+![image-20241008150321881](./Rip code.assets/image-20241008150321881.png)
 
 
 
@@ -150,7 +185,7 @@ typedef struct rip_route_item_
 
 
 
-###  RIPv2加密认证报文头部
+###  rip_authen_head_
 
 <img src="./Rip code.assets/image-20240929163201100.png" alt="image-20240929163201100" style="zoom: 50%;" />
 
@@ -169,7 +204,7 @@ typedef struct rip_authen_head_
 }rip_authen_head_t;
 ```
 
-### RIPv2加密认证报文的尾部
+### rip_authen_tail_
 
 ```c
 /*rip动态认证的尾部*/
@@ -187,7 +222,7 @@ typedef struct rip_authen_tail_
 
 
 
-#### MD5报文头部
+#### rip_md5_head_
 
 ```c
 /*
@@ -219,7 +254,7 @@ typedef struct rip_md5_head_
 }rip_md5_head_t;
 ```
 
-#### MD5报文尾部
+#### rip_md5_tail_
 
 ```c
 /*
@@ -242,6 +277,8 @@ typedef struct rip_md5_tail_
 ```
 
 ****
+
+### 报文头部字段
 
 #### Command字段
 
@@ -295,24 +332,20 @@ typedef struct rip_glb_info_
 /*接口的RIP配置信息*/
 typedef struct rip_intf_
 {   
-    uint32 device_index;	                    /* 端口ID*/
-	uint32 vrf_id;     /*端口对应的VRF*/     
+    uint32 device_index;	            /* 端口ID*/
+	uint32 vrf_id;                      /*端口对应的VRF*/     
     
 	uint32 process_id; /*被使能的进程号*/
 	struct rip_process_info_ *pprocess;    // 端口对应的RIP进程信息
     
-
-/*	int ref_num;/*该端口被RIP网络覆盖的次数*/
-
-	uint32 encap_type; /* 接口封装类型*/
+	uint32 encap_type;  /*端口封装类型*/
 	uint8 state;        /*端口链路状态*/
 
-	uint8 addr_type;/*端口地址类型*/
-	uint32 address; /* 接口IP地址*/	
-	uint32 mask;    /* 接口IP地址掩码*/
-	uint32 aid;  	/* address id ，当在接口配置多个地址时，表示其id*/
+	uint8 addr_type;    /*端口地址类型*/
+	uint32 address;     /* 接口IP地址*/	
+	uint32 mask;        /* 接口IP地址掩码*/
+	uint32 aid;  	    /* address id ，当在接口配置多个地址时，表示其id*/
 
-	
 	uint8 split_flag;   /* 端口开启的分割类型（水平分割/毒性逆转水平分割） */
 	uint8 special_flag; /*passive,notreceive,v1demand,v2demand--dangzhw,20091111*/
     
@@ -336,7 +369,7 @@ typedef struct rip_intf_
 	int nbr_route_num;
 	uint32 auth_commit_timer_id;
 	uint32 auth_commit_time;
-	/* 端口enable bfd,just for show*/
+	/* 端口enable bfd,just for show */
 	uint8 bfd_enable_flag;
 
 	/* Commented by dangzw in 2009.03.04 19:10:01 */
@@ -348,7 +381,6 @@ typedef struct rip_intf_
     
 	struct dynamic_key_list_  key_list;			/*邻居的key链表*/
 	struct dynamic_key_list_  key_timeout_list; /*邻居间超时的key链表*/
-	
 }rip_intf_t;
 ```
 
@@ -375,18 +407,18 @@ typedef struct rip_route_
 	struct route_node *route_node;
 
 	struct rip_process_info_ *pprocess; /*路由归属的rip进程*/
-	/*uint32 process_id;*/
+
 	uint32 gw_addr;   /*网关地址*/
 	uint32 gw_index;  /*路由对应的端口*/	
 	uint32 next_hop;	
-	uint32 distance;  /*RIP 路由管理距离*/
-	uint32 metric;    /*RIP 路由metric值*/
-	uint16 route_tag; /*RIP 路由标识*/
-	uint16 route_type;/*路由类型:汇总, 直连, 转发, 学习*/
+	uint32 distance;  /*RIP路由管理距离*/
+	uint32 metric;    /*RIP路由metric值*/
+	uint16 route_tag; /*RIP路由标识（域内或域外）*/
+	uint16 route_type;/*路由类型:邻居, 直连, 转发, 汇总，缺省*/
 
-	int32 refresh_time;/*路由刷新时间*/
+	int32 refresh_time;   /*路由刷新时间*/
 	uint32 equi_route_num;/*等价路由数*/	
-	uint32 equi_nbr_num;/*从邻居学习到的等价路由数目，只针对邻居的同distance和metric的路由信息*/
+	uint32 equi_nbr_num;  /*从邻居学习到的等价路由数目，只针对邻居的同distance和metric的路由信息*/
 	
 	/*Fengsb add 2006-05-23  */
 	rip_subrt_t rip_connect; /* list for subnet connect route */
@@ -395,8 +427,8 @@ typedef struct rip_route_
 	uint16 rmap_set_metric; /* metric值是否为route-map所设 */
 
 	struct rip_route_list_ *hold_ptr;/*指向holddown list中的指针*/
-    struct rip_route_list_ *nbr_ptr; /* point to the nbr list on the interface */
-	struct rip_route_list_ *red_ptr;/*Fengsb 2006-02-19 指向redistribute list中entry的指针*/
+    struct rip_route_list_ *nbr_ptr; /*point to the nbr list on the interface */
+	struct rip_route_list_ *red_ptr; /*Fengsb 2006-02-19 指向redistribute list中entry的指针*/
 }rip_route_t;
 ```
 
@@ -507,11 +539,11 @@ typedef struct rip_process_info_
 	uint32 trigger_timeout; /*Fensb add for configure trigger timeout*/
 	uint32 peer_timeout;/*peer timeout time --dangzhw*/
 
-	uint32 update_timer_id;  /*RIP update定时器ID*/
-	uint32 expire_timer_id;  /*RIP invalid定时器ID*/
-	uint32 holddown_timer_id;  /*RIP holddown定时器ID*/
-	uint32 trigger_timer_id; /*RIP触发更新定时器ID*/
-	uint32 peer_timer_id; /*RIP peer超时定时器ID*/
+	uint32 update_timer_id;   /*RIP update定时器ID*/
+	uint32 expire_timer_id;   /*RIP invalid定时器ID*/
+	uint32 holddown_timer_id; /*RIP holddown定时器ID*/
+	uint32 trigger_timer_id;  /*RIP触发更新定时器ID*/
+	uint32 peer_timer_id;     /*RIP peer超时定时器ID*/
 	
 	struct rip_route_list_  holddown_list; /*处于holddown状态的路由列表*/
 	/*struct rip_trigger_list_ trigger_list; *//*RIP 触发更新路由列表*/
@@ -588,6 +620,30 @@ typedef struct rip_neigh_list_
 ```
 
 
+
+## rip_trigger_list_
+
+```c
+/*RIP触发更新列表*/
+typedef struct rip_trigger_list_
+{
+	struct rip_trigger_list_ *forw, *back;
+    
+	/*Fengsb 2006-02-13 add: if  route_node==NULL, means the route is rmv frm rip local table
+	so update timeout, this entry can't be compressed */
+	struct route_node *route_node; 
+	uint32 network;
+	uint32 mask;
+	uint32 next_hop;
+	uint32 metric;
+
+	uint32 gw_index;
+	uint32 gw_addr;
+
+	uint16 route_type;
+	uint16 route_tag;
+}rip_trigger_list_t;
+```
 
 
 
@@ -704,4 +760,594 @@ oid rip_variables_oid[] = { 1,3,6,1,2,1,23 };
 
 - 检查传入的数据包长度参数是否合法` <= RIP_MAX_PACKET_SIZE`
 - 从socket中接收数据
+
+
+
+
+
+
+
+## rip_intf.c
+
+### 
+
+
+
+
+
+### rip_create_connect_route
+
+```c
+// 创建直连路由
+int rip_create_connect_route( uint32 device_index ,uint warning)
+```
+
+> 1.对device_index进行参数合法性验证
+>
+> ```c
+> if( (device_index > INTERFACE_DEVICE_MAX_NUMBER)
+> 	|| (NULL == rip_intf_array[device_index]) )
+> {
+> 	return RIP_FAIL;
+> }
+> ```
+>
+> 2.根据device_index检查端口对应的RIP进程是否为NULL
+>
+> ```c
+> if(!(pprocess = rip_intf_array[device_index]->pprocess))
+> 		return RIP_FAIL;
+> ```
+>
+> 3.根据device_index检查该端口的直连路由是否已被创建
+>
+> ```c
+> if(rip_intf_array[device_index]->connect_route)
+> 	return RIP_SUCCESS;
+> ```
+>
+> 4.填充route_prefix
+>
+> ```c
+> memset( &route_prefix, 0, sizeof(struct prefix) );
+> route_prefix.family   = AF_INET;
+> route_prefix.safi     = SAFI_UNICAST;   // 交换的是 IPv4 单播路由
+> route_prefix.prefixlen = mask_to_prefix( rip_intf_array[device_index]->mask );
+> route_prefix.u.prefix4.s_addr = rip_intf_array[device_index]->address & rip_intf_array[device_index]->mask;
+> ```
+>
+> 5.根据route_prefix获取端口对应的RIP进程下的路由表中相应的结点 `rip_route_node`
+>
+> ```c
+> /*获取route_node*/
+> rip_route_node = route_node_get( pprocess->rip_table, &route_prefix, NULL );
+> if( NULL == rip_route_node ){
+> 	return RIP_FAIL;
+> }
+> ```
+>
+> 6.检查路由节点中的info是否为NULL，若不为NULL，则删掉与直连路由等价的`学到和重发布的路由`
+>
+> ```c
+> rip_route = (struct rip_route *)(rip_route_node->info);
+> if(rip_route){
+>     /* 删掉学到的路由和重发布的相同路由 */
+> 	rip_del_route_node(rip_route); 
+> 	rip_route = (struct rip_route_ *)(rip_route_node->info);
+> 	if(rip_route){
+> 		route_unlock_node(rip_route_node);
+> 		syslog(LOG_ERR, "rip: create connect route fail!\n");
+> 		return RIP_FAIL; 
+> 	}
+> } 
+> ```
+>
+> 7.填充rip_route数据信息
+>
+> ```c
+> rip_route = (struct rip_route_ *)rip_mem_malloc(sizeof(struct rip_route_), RIP_ROUTE_TYPE );
+> if( NULL == rip_route ){
+> 	route_unlock_node(rip_route_node);
+> 	fprintf(stderr, "RIP: Malloc memory failed.'(%s, %d)\n", __FILE__, __LINE__ );
+> 	return RIP_MEM_FAIL;
+> }
+> memset( (void *)rip_route, 0, sizeof(struct rip_route_) );
+> rip_route->forw = rip_route;
+> rip_route->back = rip_route;
+> 
+> rip_route->route_tag = RIP_INTERNAL_ROUTE;  // 路由标记：域内路由
+> rip_route->route_type = RIP_CONNECT_ROUTE;  // 路由类型：直连
+> 	
+> rip_route->refresh_time = time_sec;	
+> rip_route->pprocess= pprocess;
+> 	
+> rip_route->gw_index = device_index;
+> /*Fengsb add 2006-04-30 : this distance is the distance that no consider network and mask*/
+> rip_route->distance = pprocess->distance_list->default_distance;
+> 	
+> rip_route->gw_addr = 0;/*直连路由,无网络地址*/
+> rip_route->metric = RIP_DIRECT_METRIC;
+> 
+> rip_route->hold_ptr = NULL;
+> 	
+> /*路由加入route node */
+> rip_route_node->info = (void *)rip_route;	
+> rip_route->route_node = rip_route_node;
+> 	
+> pprocess->route_num++;
+> pprocess->connect_route_num++;
+> rip_route->equi_route_num++;
+> ```
+>
+> 8.后续的处理
+>
+> ```c
+> // 添加接口的直连路由
+> rip_intf_array[device_index]->connect_route = rip_route;
+> /*将新路由加入触发更新列表*/
+> rip_add_trigger( rip_route, pprocess, FALSE );	
+> rip_debug(RIP_DEBUG_IP_RIP_DATABASE, "RIP-DB: Adding connected route %s/%d to RIP database\n", ip_ntoa(route_prefix.u.prefix4.s_addr), route_prefix.prefixlen );
+> 
+> pprocess->rip2GlobalRouteChanges++;
+> /*Fengsb 2006-05-23 创建汇总路由*/
+> rip_create_summary_route(device_index , rip_route ,pprocess);
+> ```
+>
+> 
+
+
+
+### rip_del_route
+
+```c
+// 删除该路由
+int rip_del_route( struct rip_route_ *rip_route )
+```
+
+> 1.将路由对应的节点下的info转为` rip_route_ *`类型，返回路由头节点
+>
+> ```c
+> rip_route_head = (struct rip_route_ *)(rip_route->route_node->info);
+> if(rip_route_head == NULL )
+> 	return RIP_SUCCESS;
+> ```
+>
+> 2.检查rip_route_head的pprocess进程是否为空
+>
+> ```c
+> if(!(pprocess = rip_route_head->pprocess)){
+> 	rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+> 	return RIP_FAIL;
+> }
+> ```
+>
+> 3.等价路由条目-1
+>
+> ```c
+> rip_route_head->equi_route_num--;
+> ```
+>
+> 4.检查删除的rip_route节点是否与头节点相同
+>
+> ```c
+> if( rip_route_head != rip_route ){
+> 	/*rip_route从route_node中删除*/
+> 	REMQUE( rip_route );
+> }
+> else{
+> /*Fengsb add note 2006-02-14此处应该考虑等价路由，若存在等价路由，需要把下一route entry挂在info上，同时需要注意equi_route_num的处理*/
+>     // 若该删除的路由是头节点，则判断是否存在其他等价路由，若存在，则修改头节点信息
+> 	if(rip_route_head->equi_route_num != 0){
+> 		rip_route->route_node->info = rip_route->forw;
+> 		rip_new_rthead = (struct rip_route_ *)(rip_route->route_node->info);
+> 		rip_new_rthead->equi_route_num = rip_route_head->equi_route_num;
+> 		rip_new_rthead->equi_nbr_num = rip_route_head->equi_nbr_num;
+> 		rip_route_head = rip_new_rthead;
+> 		/*remove头节点以后，调整后续节点链表指针*/
+> 		rip_route->forw->back = rip_route->back;
+> 		rip_route->back->forw = rip_route->forw;		
+> 	}
+> 	else{
+> 		rip_route->route_node->info = NULL;
+> 	}
+> }
+> ```
+>
+> 5.根据不同的路由类型做相应处理
+>
+> ```c
+> switch( rip_route->route_type )
+> {
+> 	case RIP_CONNECT_ROUTE:
+> 		device_index = rip_route->gw_index;
+> 		rip_intf_array[device_index]->connect_route = NULL;
+> 		pprocess->connect_route_num--;
+> 		pprocess->route_num--;
+> 		rip_debug(RIP_DEBUG_IP_RIP_DATABASE, "RIP-DB: Deleting connected route %s/%d from RIP database\n", ip_ntoa(rip_route->route_node->p.u.prefix4.s_addr), rip_route->route_node->p.prefixlen );
+> 		break;
+> 	case RIP_NBR_ROUTE:
+> 		/*学习路由,从主路由表中删除*/
+> 		/*before del route, del the peer first*/
+> 		rip_peer = pprocess->peer_list.forw;
+> 		while(rip_peer != &(pprocess->peer_list))
+> 		{
+> 			rip_peer_forw = rip_peer->forw;
+> 			if(rip_peer->peer_addr == rip_route->gw_addr)
+> 			{
+> 				rip_peer->ref_num --;
+> 				break;
+> 			}
+> 			rip_peer = rip_peer_forw;
+> 		}
+> 		rip_del_from_main_tbl( rip_route ,pprocess->process_id);
+> 
+> 		pprocess->nbr_route_num--;
+> 		pprocess->route_num--;
+> 		rip_route_head->equi_nbr_num--;
+> 
+> 		if( rip_glb_info.debug_flag & RIP_DEBUG_IP_RIP_DATABASE )
+> 		{
+> 			sprintf(string, "RIP-DB: Deleting learn route %s/%d <metric %ld>", ip_ntoa(rip_route->route_node->p.u.prefix4.s_addr), rip_route->route_node->p.prefixlen, rip_route->metric );
+> 			sprintf(string, "%s via %s from RIP database", string, ip_ntoa( rip_route->gw_addr ) );
+> 			rip_debug(RIP_DEBUG_IP_RIP_DATABASE, "%s\n", string );
+> 		}
+> 
+> 		break;
+> 	case RIP_REDIS_ROUTE:
+> 		/*转发路由*/
+> 		pprocess->redis_route_num--;
+> 		pprocess->route_num--;
+>         b_del_redis = TRUE; /*Fengsb 2006-04-27 add */
+> 	    rip_debug(RIP_DEBUG_IP_RIP_DATABASE, "RIP-DB: Deleting redistributed route %s/%d from RIP database\n", ip_ntoa(rip_route->route_node->p.u.prefix4.s_addr), rip_route->route_node->p.prefixlen );
+> 		break;
+> 	case RIP_DEF_ROUTE:
+> 		/*缺省路由*/			
+> 		pprocess->route_num--;  
+> 		b_del_redis = TRUE; /* ygc add 2012-09-25 */
+> 		rip_debug(RIP_DEBUG_IP_RIP_DATABASE, "RIP-DB: Deleting rip default route %s/%d from RIP database\n", ip_ntoa(rip_route->route_node->p.u.prefix4.s_addr), rip_route->route_node->p.prefixlen );
+> 		break;
+> 	case RIP_SUMMARY_ROUTE:
+> 		/*汇总路由*/			
+> 		pprocess->route_num--; 
+> 		pprocess->sum_route_num--;  
+> 		rip_debug(RIP_DEBUG_IP_RIP_DATABASE, "RIP-DB: Deleting rip summary route %s/%d from RIP database\n", ip_ntoa(rip_route->route_node->p.u.prefix4.s_addr), rip_route->route_node->p.prefixlen );
+> 		break;
+> 	default:
+> 		break;
+> }
+> ```
+>
+> 6.触发更新
+>
+> ```c
+> /*Fengsb 2006-02-15 add the first condition to avoid route linar circle 
+> 	触发更新,metric值为16*/
+> if( (rip_route_head->equi_route_num == 0) 
+>     && ( RIP_MAX_METRIC != rip_route->metric ) && (rip_route->route_type != RIP_SUMMARY_ROUTE))
+> {
+> 	rip_route->metric = RIP_MAX_METRIC;		
+> 	rip_add_trigger(rip_route, pprocess, TRUE);
+> }
+> else if(b_del_redis == TRUE)
+> { /*用于删除转发路由后，同一节点还存在邻居学习到的路由的情况*/
+> 	rip_add_trigger(rip_route, pprocess, TRUE);
+> }
+> 	
+> /*Fengsb 2006-02-16 因为每次添加路由，都对route_node lock++，所以删除路由
+> 的时候，也需要对route node lock--*/
+> 	route_unlock_node( rip_route->route_node );		
+> 
+> 	/*释放rip_route*/
+> 	rip_mem_free( rip_route, RIP_ROUTE_TYPE );
+> 	rip_route=NULL;  /* fangqi add this */
+> 	pprocess->rip2GlobalRouteChanges++;
+> ```
+>
+> 
+
+
+
+### rip_del_from_main_tbl
+
+```c
+void rip_del_from_main_tbl( struct rip_route_ *rip_route ,uint32 processid)
+```
+
+```c
+// 从主路由表中删除路由
+// 主路由表中只允许缺省4条，最大8条等价路由，因此，此处的尽管rip可能存在多条等价路由，也只能添加4或者8条进入主路由表
+void rip_del_from_main_tbl( struct rip_route_ *rip_route ,uint32 processid);
+```
+
+> 1.从等价路由表中删除路由信息
+>
+> ```c
+> rt_delete_protort_notify( rip_route->pprocess->vrf_id,
+> 							rip_route->route_node->p.u.prefix4.s_addr,
+> 							prefix_to_mask(rip_route->route_node->p.prefixlen),
+> 						      RTPROTO_RIP,
+> 						      processid );
+> ```
+>
+> 2.检查是否存在其他等价路由，若有，则再加入主路由表中
+>
+> ```c
+> if(( rip_route_head == NULL) || ( rip_route_head->equi_route_num == 0 )){
+> 	return;
+> }
+> equal_rtnum = rt_get_equal_rtnum_confg();    // 4
+> rip_gateway_temp = ( struct rt_gateway *)rip_mem_malloc( sizeof(struct rt_gateway)*equal_rtnum, RIP_RT_GATEWAY_TYPE );
+> if(!rip_gateway_temp)return;
+> bzero( rip_gateway_temp, sizeof(struct rt_gateway)*equal_rtnum);
+> ```
+>
+> 3.向路由表中添加等价路由
+>
+> ```c
+> gateway_num = 0;	
+> for( count = 1, rip_route_temp = rip_route_head; count <= rip_route_head->equi_route_num; rip_route_temp = rip_route_temp->forw, count++ )
+> 	{	
+> 		/*not add metric = 16 rip route to rt table*/
+> 		if( (RIP_NBR_ROUTE == rip_route_temp->route_type)
+> 			&& (rip_route_temp->distance >= RIP_MAX_DISTANCE || rip_route_temp->metric >= RIP_MAX_METRIC)) 
+> 		{
+> 			continue;
+> 		}
+> 
+> 		/*Fengsb 2006-02-19 注意，只能向主路由表添加学习到的路由，
+> 		因为转发进来的路由放在route node的第一个节点，所以需要进行
+> 		判断*/
+> 		if(RIP_REDIS_ROUTE == rip_route_temp->route_type)
+> 		{
+> 			continue;
+> 		}
+> 		if(RIP_SUMMARY_ROUTE == rip_route_temp->route_type)
+> 		{
+> 			continue;
+> 		}
+> 		/*fengsb add the following  if case 2006-05-18*/
+> 		if(RIP_DEF_ROUTE == rip_route_temp->route_type)
+> 		{
+> 			continue;
+> 		}
+> /*		memset( (void *)&rip_gateway_temp[gateway_num], 0, sizeof(struct rt_gateway) ); */
+> 
+> 		if( rip_route_temp->next_hop != 0 )
+> 		{
+> 			rip_gateway_temp[gateway_num].gateway = rip_route_temp->next_hop;
+> 		}
+> 		else
+> 		{
+> 			rip_gateway_temp[gateway_num].gateway = rip_route_temp->gw_addr;
+> 		}
+> 
+> 		rip_gateway_temp[gateway_num].flags = 1;
+> 		if(rip_intf_array[rip_route_temp->gw_index])
+> 			rip_gateway_temp[gateway_num].aid = rip_intf_array[rip_route_temp->gw_index]->aid;
+> 		rip_gateway_temp[gateway_num].index   = rip_route_temp->gw_index;
+> 		rip_gateway[gateway_num] = &rip_gateway_temp[gateway_num];
+>         
+> 		/*Fengsb 2006-02-13, 不能超过主路由表允许的等价路由数目*/
+> 		gateway_num++;
+> 		if(gateway_num >= equal_rtnum)
+> 		{
+> 			break;
+> 		}
+> }
+> 
+> if(gateway_num > 0)
+> 	{
+> 		rt_add_protort_notify( rip_route->pprocess->vrf_id, 
+> 							rip_route->route_node->p.u.prefix4.s_addr,
+> 							prefix_to_mask(rip_route->route_node->p.prefixlen),
+> 							RTPROTO_RIP,
+> 							gateway_num,
+> 							rip_gateway,
+> 							0,
+> 							NULL,
+> 							RTS_INTERIOR|RTS_ELIGIBLE,
+> 							rip_route->metric,
+> 							rip_route->distance,
+> 							rip_route->route_tag,
+> 							processid, 0);
+> 	}
+> 	rip_mem_free(rip_gateway_temp, RIP_RT_GATEWAY_TYPE);
+> ```
+>
+> 
+
+## rip_packet.c
+
+### rip_del_route_node
+
+```c
+// 清空路由节点
+void rip_del_route_node( struct rip_route_ *rip_route )
+```
+
+> 1.对`rip_route`参数合法性检查
+>
+> 2.删除路由逻辑
+>
+> ```c
+> rip_route_temp = rip_route->forw;
+> while( rip_route_temp != rip_route )
+> {
+> 	rip_route_forw = rip_route_temp->forw;
+> 	/*从holddown列表中删除*/
+> 	rip_del_holddown( rip_route_temp);
+> 	/*从相应端口的学习路由列表中删除*/
+> 	rip_del_from_nbr_list( rip_route_temp );
+> 	/*从重发布列表中删除*/
+> 	rip_del_from_redis_list( rip_route_temp );
+> 	/*删除路由*/
+> 	ret = rip_del_route( rip_route_temp );
+> 	if( RIP_SUCCESS != ret )
+> 	{
+> 		rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+> 		return;
+> 	}
+> 	rip_route_temp = rip_route_forw;
+> };
+> 
+> /*free rip_route*/
+> /*从holddown列表中删除*/
+> rip_del_holddown( rip_route );
+> /*从相应端口的学习路由列表中删除*/
+> rip_del_from_nbr_list( rip_route );
+> /*从重发布列表中删除*/
+> rip_del_from_redis_list( rip_route );
+> /*删除路由*/
+> ret = rip_del_route( rip_route );
+> if( RIP_SUCCESS != ret ){
+> 	rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+> 	return;
+> }
+> ```
+
+
+
+
+
+## rip_timer.c
+
+### rip_add_trigger
+
+```c
+// 将路由添加到触发更新列表中
+void rip_add_trigger( struct rip_route_ *rip_route, struct rip_process_info_ *pprocess, BOOL b_DelFrmRipTbl )
+```
+
+> 1.
+>
+> ```c
+> struct rip_route_ *rip_route_head = rip_route->route_node->info;
+> // 默认路由、转发路由和汇总路由不会添加
+> if(rip_route_head && (rip_route_head != rip_route) && (rip_route_head->metric != RIP_MAX_METRIC)){
+> 	if((rip_route_head->route_type==RIP_DEF_ROUTE)
+> 		||(rip_route_head->route_type==RIP_REDIS_ROUTE)
+> 		||(rip_route_head->route_type==RIP_SUMMARY_ROUTE)){
+> 			rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+> 			return;
+> 		}
+> }
+> ```
+>
+> 
+
+
+
+### rip_del_holddown
+
+```c
+// 从holddown更新列表中删除该路由
+void rip_del_holddown( struct rip_route_ *rip_route )
+```
+
+> 1.检查路由是否处于holddown状态，若不处于则无需处理
+>
+> ```c
+> if((!rip_route)||(NULL == rip_route->hold_ptr)){
+> 	return;
+> }
+> ```
+>
+> 2.检查路由类型是否是从邻居节点学习到的
+>
+> ```c
+> /*只有学习到的路由才会加入路由表*/
+> if( RIP_NBR_ROUTE != rip_route->route_type ){
+> 	return;
+> }
+> ```
+>
+> 3.检查管理路由的进程是否为NULL
+>
+> ```
+> if(!(pprocess = rip_route->pprocess)){
+> 	rip_debug( RIP_DEBUG_IP_RIP_RETURN,"RIP:%s,%d ,error pprocess %x\n",__FILE__,__LINE__,pprocess);
+> 	return;
+> }
+> ```
+>
+> 4.删除路由下的hold_ptr
+>
+> ```c
+> REMQUE( rip_route->hold_ptr ); //  ？？？？
+> rip_mem_free( rip_route->hold_ptr, RIP_ROUTE_LIST_TYPE );
+> rip_route->hold_ptr = NULL;
+> ```
+>
+> 5.rip进程的holddown_route_num减一
+>
+> ```c
+> pprocess->holddown_route_num--;
+> ```
+>
+> 6.检查holddown_route_num是否为0，若为0，则需关闭holddown定时器
+>
+> ```c
+> if( (pprocess->holddown_route_num == 0) && (pprocess->holddown_timer_id != 0) ){
+> 	/*停止holddown定时器*/
+> 	sys_stop_timer( pprocess->holddown_timer_id );
+> }
+> ```
+
+
+
+### rip_del_from_nbr_list
+
+```c
+// 从相应端口的学习路由列表中删除指的路由
+void rip_del_from_nbr_list( struct rip_route_ *rip_route )
+```
+
+> 1.检查路由类型是否是`从邻居节点学习到`的类型
+>
+> ```c
+> /*只对学习到的路由进行处理*/
+> if(!rip_route || RIP_NBR_ROUTE != rip_route->route_type ){
+> 	return;
+> }
+> ```
+>
+> 2.从gw_index的学习列表中删除
+>
+> ```c
+> device_index = rip_route->gw_index;
+> rip_route_list_temp = rip_route->nbr_ptr;
+> if(rip_route_list_temp){
+>     REMQUE( rip_route_list_temp );
+>     rip_mem_free( rip_route_list_temp, RIP_ROUTE_LIST_TYPE );
+>     rip_intf_array[device_index]->nbr_route_num--;
+>     rip_route->nbr_ptr = NULL;
+> }
+> ```
+
+
+
+## rip_redis.c
+
+### rip_del_from_redis_list
+
+```c
+void rip_del_from_redis_list(struct rip_route_ *rip_route)
+```
+
+> 1.检查是否是转发路由
+>
+> ​	if(!rip_route||rip_route->route_type!=RIP_REDIS_ROUTE) return;
+>
+> 2.从重发布列表中删除路由
+>
+> ```c
+> redis_list=rip_route->red_ptr;
+> if(redis_list){
+> 	REMQUE(redis_list);
+> 	rip_mem_free(redis_list,RIP_ROUTE_LIST_TYPE);
+> 	rip_route->red_ptr=NULL;
+> }
+> ```
+
+
 
