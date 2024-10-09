@@ -36,6 +36,12 @@ IOU1(config-if)#ip summary-address rip 172.16.0.0 255.255.0.0
 
 <img src="./RIP.assets/image-20240925173553944.png" alt="image-20240925173553944" style="zoom: 50%;" />
 
+<img src="./RIP.assets/image-20241009131640601.png" alt="image-20241009131640601" style="zoom:67%;" />
+
+<img src="./RIP.assets/image-20241009131708335.png" alt="image-20241009131708335" style="zoom: 67%;" />
+
+![image-20241009131739701](./RIP.assets/image-20241009131739701.png)
+
 ## 优点
 
 - 在小型网络中，RIP使用的带宽以及配置和管理时间方面的开销非常小
@@ -1681,8 +1687,8 @@ RIPv2安全关联中的最小数据项
 
 RIPv2 数据包的创建方式与往常一样，但有以下例外：
 
-1.  应计算 UDP 校验和，但可以将其设置为零，因为本规范中的任何加密身份验证机制都将提供比标准 UDP 校验和更强的完整性保护。
-2. Authentication Type（身份验证类型）字段指示加密身份验证 (3)。
+1.  不需要计算 UDP 校验和，但可以将其设置为零。
+2. Authentication Type（身份验证类型）字段设置为3。
 3. 认证“password”字段被重新用于存储认证数据的分组偏移、密钥标识符、认证数据长度和非递减序列号。
 
 <img src="./RIP.assets/image-20240929134334324.png" alt="image-20240929134334324" style="zoom: 67%;" />
