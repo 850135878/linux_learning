@@ -1004,9 +1004,100 @@ int rip_get_recv_version( uint32 device_index );
 > }
 > ```
 
+### rip_set_send_version
+
+```c
+int rip_set_send_version( uint32 device_index );
+```
+
+> 1.返回端口设置的send_version
+>
+> ```c
+> /*端口版本优先*/
+> switch( rip_intf_array[device_index]->send_version )
+> {
+>     // 若端口指定为默认，需要根据全局rip进程的设置来返回send_version
+>     case RIP_SEND_VERSION_DEF:
+>         if( RIP_VERSION_1 == pprocess->version )
+>         {
+>             return RIP_SEND_VERSION_1;      /*发送版本1*/
+>         }
+>         else if( RIP_VERSION_2 == pprocess->version )
+>         {
+>             return RIP_SEND_VERSION_2_MULTICAST;/*发送版本2,目的地址224.0.0.9*/
+>         }
+>         /* 为了配合北京联通测试，增强rip的自适应功能，在缺省version的情况下(全局version和端口version都缺省)，
+>         若目前该端口和对端是一对一的链接时，则按照对端的版本号发送；
+>         若该端口对端是多个接口(一对多，如通过hub)，但这多个接口运行的版本号一致，
+>         则发送他们共同的verision；
+>         若这多个接口的version不一致，则按系统默认的version发送(目前是version 1)
+>          * Commented by dangzhw in 2009.10.12 09:57:15 */
+>         else if(RIP_VERSION_DEF == pprocess->version)
+>         {
+> 			// 若目前该端口和对端是一对一的链接时，则按照对端的版本号发送；
+>             peer_version = rip_loopup_peer_version(device_index);
+>             if( (peer_version == RIP_VERSION_1) || (peer_version == RIP_VERSION_2))
+>                 return peer_version;
+>             else
+>             {
+>                 /*return RIP_SEND_VERSION_1;*/
+> 
+>                 /* 为了规避收到rip报文后对verison1下的路由信息合法性耗时的检查,
+>                 将默认版本号设置为version2的multicast方式
+>                  * Commented by dangzhw in 2010.02.20 14:25:50 */
+>                 return RIP_SEND_VERSION_2_MULTICAST;
+>             }
+>         }
+>         break;
+>     case RIP_SEND_VERSION_1:
+>         return RIP_SEND_VERSION_1;           /*发送版本1*/
+>         break;
+>     case RIP_SEND_VERSION_2_BROADCAST:
+>         return RIP_SEND_VERSION_2_BROADCAST; /*广播发送版本2*/
+>         break;
+>     case RIP_SEND_VERSION_2_MULTICAST:
+>         return RIP_SEND_VERSION_2_MULTICAST; /*发送版本2,目的地址224.0.0.9*/
+>         break;
+>     default:
+>         break;
+> }
+> ```
+>
+> 
 
 
 
+### rip_enable_auto_summary
+
+```c
+/**
+函数功能: 判断自动汇总功能是否启动
+输入参数: rip_tbl_info: RIP路由表
+输出参数: 无
+返回值:    自动汇总功能启动,返回TRUE
+          自动汇总功能禁止,返回FALSE
+*/
+BOOL rip_enable_auto_summary( struct rip_process_info_ *pprocess,uint32 device_index );
+```
+
+> 1.检查端口的send_version，若是RIPv1则返回TRUE；否则，查看全局RIP信息
+>
+> ```c
+> sendversion = rip_set_send_version(device_index);
+> if(/*RIP_VERSION_DEF == sendversion || */RIP_VERSION_1 == sendversion)
+> {
+>     return TRUE;
+> }
+> else
+> {
+>     if(RIP_AUTO_SUMMARY_DISABLE == pprocess->auto_summary_flag)
+>         return FALSE;
+>     else 
+>         return TRUE;
+> }
+> ```
+>
+> 
 
 ## rip_intf.c
 
@@ -1746,15 +1837,73 @@ int rip_recv_packet( uint32 pkt_len );
 >
 > 8.对接收到的报文进行合法性验证
 >
-> - 获取报文头部，并检查合法性
+> ```c
+> ret = rip_packet_check( device_index, &src_socket );
+> if( RIP_SUCCESS != ret )
+> {
+>     pintf->rip2IfStatRcvBadPackets++;
+>     if(peer != &(pprocess->peer_list))peer->rip2PeerRcvBadPackets++;
+>     rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+>     return ret ;
+> }
+> ```
 >
->   ```
->   
->   ```
+> 9.若没找的邻居节点，则新建一个
 >
->   
+> ```c
+> if(peer == &(pprocess->peer_list))  ？？？
+> {
+>     peer = rip_mem_malloc(sizeof(struct rip_peer_list_), RIP_PEER_LIST_TYPE);
+>     if(peer==NULL)return RIP_FAIL;
+>     memset((void *)peer, 0, sizeof(struct rip_peer_list_));
+>     peer->peer_addr = src_socket_intf->sin_addr.s_addr;
+>     peer->peer_port = src_socket_intf->sin_port;
+>     peer->peer_intf = device_index;   // 
+>     INSQUE(peer, pprocess->peer_list.back);
+> 
+>     if(pprocess->peer_timer_id && (sys_timer_state(pprocess->peer_timer_id) != PTIMER_RUNNING))
+>     {
+>         sys_start_timer(pprocess->peer_timer_id, pprocess->peer_timeout);
+>     }
+> }
+> ```
+>
+> 10.存储邻居发送的更新路由信息
+>
+> ```
+> /*记录端口的peer信息*/
+> peer->rip2PeerVersion = rip_pkt_head->version;
+> peer->peer_domain = rip_pkt_head->zero;
+> peer->rip2PeerLastUpdate = time_sec;
+> ```
+>
+> 11.根据command类型，处理请求或响应数据
+>
+> ```c
+> switch( rip_pkt_head->cmd )
+> {
+>     case RIP_REQUEST:
+>         ret = rip_recv_request( device_index, pkt_len, peer );
+>         if( RIP_SUCCESS != ret )
+>         {
+>             return ret;
+>         }
+>         break;
+>     case RIP_RESPONSE:
+>         ret = rip_recv_response( device_index , pkt_len, peer );
+>         if( RIP_SUCCESS != ret )
+>         {
+>             return ret;
+>         }
+>         break;
+>     default:
+>         break;				
+> }
+> ```
+>
+> 
 
-### rip_packet_check
+#### rip_packet_check ？
 
 ```c
 int rip_packet_check( uint32 device_index, struct soaddr_in *src_socket );
@@ -1848,13 +1997,35 @@ int rip_packet_check( uint32 device_index, struct soaddr_in *src_socket );
 > }
 > ```
 >
-> 5.认证检测
+> 5.认证检测，认证成功再判断
 >
 > ```c
 > ret = rip_auth_check( device_index, src_socket->sin_addr.s_addr );
+> if( RIP_SUCCESS != ret )
+> {
+>     return RIP_FAIL; 
+> }//表示该接口是否处于“认证提交”状态。它可能是一个定时器，用于监控邻居认证状态
+> else if(rip_intf_array[device_index]->auth_commit_time) 
+> {
+>     struct rip_peer_list_ *peer = pprocess->peer_list.forw;
+>     int cnt = 0;
+>     while(peer != &(pprocess->peer_list))
+>     {
+>         if(peer->peer_addr==src_socket->sin_addr.s_addr)
+>             peer->auth_state=0;
+>         // 记录未通过认证的数量
+>         else if((peer->peer_intf==device_index)&&peer->auth_state)cnt++; 
+>         peer=peer->forw;
+>     }
+>     if(cnt==0)  ？？？
+>     {
+>         rip_intf_array[device_index]->auth_commit_time=0;
+>         sys_stop_timer(rip_intf_array[device_index]->auth_commit_timer_id);
+>     }
+> }
 > ```
 
-### rip_version_check
+#### rip_version_check
 
 ```c
 // 检测端口能否接收该rip报文的版本号
@@ -1900,7 +2071,7 @@ int rip_version_check( uint32 device_index, uint32 src_addr )
 > }
 > ```
 
-### rip_auth_check ？
+#### rip_auth_check ？
 
 ```c
 // 对接收到的报文进行认证
@@ -2099,7 +2270,9 @@ int rip_auth_check( uint32 device_index, uint32 src_addr );
 >
 > 
 
-### rip_auth_seq_check
+#### rip_auth_seq_check
+
+> 感觉pprocess->md5_record记录的是上次收到消息的邻居路由器的ip和seq_num
 
 ```c
 // 对认证报文的sequence number进行检测
@@ -2132,6 +2305,952 @@ int rip_auth_seq_check(uint32 device_index, uint32 src_address, uint32 seq_numbe
 >     }
 > }
 > ```
+
+
+
+### rip_recv_request
+
+```c
+//函数功能: RIP接收到request报文的处理函数
+//输入参数: device_index : 接收到的报文的端口
+//          pkt_len      : 接收到的报文长度
+//          src_address  : 报文源地址
+//          src_port     : 报文源端口
+int rip_recv_request( uint32 device_index , uint32 pkt_len, struct rip_peer_list_ *peer);
+```
+
+> 1.输入参数的合法性校验
+>
+> ```c
+> if( device_index > INTERFACE_DEVICE_MAX_NUMBER )
+> {
+>     return RIP_FAIL;
+> }
+> 	
+> /* add by fangqi 2006-10-10*/
+> if(rip_intf_array[device_index]==NULL)
+> {
+>     return RIP_FAIL;
+> }
+> ```
+>
+> 2.对request报文的处理
+>
+> ```c
+> pprocess= rip_intf_array[device_index]->pprocess;
+> /*获取报文头部*/
+> rip_pkt_head = (struct rip_pkt_head_ *)rip_recv_buffer;
+> packet_len = sizeof( struct rip_pkt_head_ );
+> is_special_request = FALSE;
+> request_entry_num = 0;
+> 
+> // 包头长度 + 
+> while( (packet_len + sizeof(struct rip_route_item_)) <= pkt_len )
+> {
+>     rip_route_item = (struct rip_route_item_ *)(rip_recv_buffer + packet_len);
+>     packet_len += sizeof(struct rip_route_item_);
+> 	// 前面已经认证过了
+>     if( RIP_AUTH_AFI == htons(rip_route_item->afi)  )
+>     {
+>         /*对报文中的认证信息不处理*/
+>         continue;
+>     }
+> 
+>     /* 判断是否是special request报文*/    
+>     if( (0 == request_entry_num)   // 请求特定的路由条目，即请求整个路由表
+>         && (0 == rip_route_item->afi)
+>         && (RIP_MAX_METRIC == htonl(rip_route_item->metric)) )
+>     {
+>         is_special_request = TRUE;
+>     }
+> 
+>     request_entry_num++;
+> 	
+>     // 请求的是整个路由表
+>     if( TRUE == is_special_request )  
+>     {
+>         /*special request报文的处理*/
+>         if( request_entry_num > 1)
+>         {
+>             /*special request报文只能有一个entry*/
+>             rip_debug( RIP_DEBUG_IP_RIP_PROTO_RECV, 
+>                 "RIP: ignored V%d request packet from %s (illegal request)\n", rip_pkt_head->version, ip_ntoa(peer->peer_addr) );
+>             return RIP_SUCCESS;
+>         }
+>         else
+>         {
+>             rip_debug( RIP_DEBUG_IP_RIP_PROTO_RECV, "\taddress_family_identifier = %d\n", htons(rip_route_item->afi) );
+>             rip_debug( RIP_DEBUG_IP_RIP_PROTO_RECV, "\tmetric = %d\n",htonl(rip_route_item->metric) );
+>         }
+>     }
+>     else/*( FALSE == is_special )*/   
+>     {
+>         // 请求获取是某些路由信息，路由表中不存在，则metric设置为16，否则，设为相应的值
+>         /*非special request报文的处理*/
+>         if( rip_glb_info.debug_flag & RIP_DEBUG_IP_RIP_PROTO_RECV )
+>         {
+>             sprintf(string, "\t%s/%d", ip_ntoa(rip_route_item->network), mask_to_prefix(rip_route_item->mask) );
+>             sprintf(string, "%s via %s metric %lu", string, ip_ntoa(rip_route_item->next_hop), htonl(rip_route_item->metric));
+> 
+>             rip_debug(RIP_DEBUG_IP_RIP_PROTO_RECV, "%s\n", string );
+>         }
+> 
+>         /*本地是否有相应的路由*/
+>         rip_route = rip_get_route( rip_route_item, pprocess->rip_table);
+>         if( NULL == rip_route )
+>         {
+>             /*本地没有改路由,entry的metric值添16*/
+>             rip_route_item->metric = htonl(RIP_MAX_METRIC);
+>         }
+>         else
+>         {
+>             /*本地有改路由,entry的metric值为找到的改路由的metric值*/
+>             rip_route_item->metric = htonl(min((rip_route->metric + 1), RIP_MAX_METRIC));
+>         }
+>     }
+> };
+> ```
+>
+> 3.request报文中没有请求路由条目,则不作回应
+>
+> ```c
+> if( 0 == request_entry_num )
+> {
+>     rip_debug( RIP_DEBUG_IP_RIP_PROTO_RECV, 
+>         "RIP: ignored V%d request packet from %s (illegal request)\n", rip_pkt_head->version, ip_ntoa(peer->peer_addr) );
+> 
+>     return RIP_SUCCESS;
+> }
+> ```
+>
+> 4.检测是否是被动接口，即只接收请求，但不做响应
+>
+> ```c
+> if(BIT_TEST(rip_intf_array[device_index]->special_flag ,RIP_PASSIVE_ENABLE)
+>     && !rip_is_neigh_addr(pprocess , peer->peer_addr))
+> {
+>     rip_debug( RIP_DEBUG_IP_RIP_PROTO_RECV, 
+>         "RIP: ignored V%d request packet from %s (interface is passive)\n", rip_pkt_head->version, ip_ntoa(peer->peer_addr) );
+>     return RIP_SUCCESS;
+> }
+> ```
+>
+> 5.发送响应
+>
+> ```c
+> if( TRUE == is_special_request )
+> {
+>     /*接收到special request报文,发送本地所有路由*/
+>     rip_send_response( device_index, peer->peer_addr, peer->peer_port);		
+> }
+> else if(rip_intf_array[device_index]->auth_type==RIP_AUTH_NONE
+> 			||rip_intf_array[device_index]->auth_type==RIP_AUTH_SIMPLE)
+> {	
+>     /*接收到entry by entry request报文,回应相应的response报文*/
+>     rip_pkt_head->cmd = RIP_RESPONSE;
+> 
+>     ret = rip_send_packet( device_index, peer->peer_addr, peer->peer_port, rip_recv_buffer, pkt_len );
+>     if( RIP_SUCCESS != ret )
+>     {
+>         rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+>         return ret;
+>     }
+> }
+> ```
+>
+> 
+
+
+
+
+
+### rip_send_response
+
+```c
+//函数功能: 发送response报文的处理函数
+//输入参数: device_index : 发送报文的端口
+//         dest_addr : 发送报文的目的地址
+//         dest_port : 发送报文的目的端口
+void rip_send_response( uint32 device_index, uint32 dest_addr, uint16  dest_port);
+```
+
+> 1.填充响应报文头部
+>
+> rip_create_pkt_head( device_index, RIP_RESPONSE );
+>
+> 2.检测端口是否开启的路由汇总功能
+>
+> ```c
+> // 若开启了自动汇总，在构建要发送的RIP数据包时，将合并特定网络的路由信息
+> if(TRUE == rip_enable_auto_summary(pprocess,device_index))
+> {		
+>     head_node = route_top( pprocess->rip_table);
+>     rip_route_node = head_node;
+>     label:while(NULL != rip_route_node)
+>     {
+>         rip_rthead = rip_route_node->info;
+> 
+>         if(NULL != rip_rthead )
+>         {
+>             prefixlen = rip_route_node->p.prefixlen;
+> 			// 如果是默认路由
+>             if (prefixlen ==0)  /*default route node */
+>             {
+>                 rip_route_item.mask =0;
+>                 goto ADDPACKET;
+>             }
+>             else
+>             {
+>                 if (rip_get_natural_network (rip_route_node->p.u.prefix4.s_addr)
+>                     == rip_get_natural_network (rip_intf_array[device_index]->address) ) /*主网相同*/
+>                 {
+>                     if( rip_rthead->route_type !=RIP_SUMMARY_ROUTE )
+>                     {
+>                         if(send_version == RIP_SEND_VERSION_2_BROADCAST || send_version == RIP_SEND_VERSION_2_MULTICAST)
+>                         {
+>                             /****版本2  下,只要自然网络相同均发送*/
+>                             rip_route_item.mask = prefix_to_mask (rip_rthead->route_node->p.prefixlen);
+>                             goto ADDPACKET;
+>                         }
+>                         else
+>                         {
+>                             if (prefixlen ==32 ||(prefix_to_mask(prefixlen)==(rip_intf_array[device_index]->mask)) )
+>                             {
+>                                 rip_route_item.mask =0;
+>                                 goto ADDPACKET;
+>                             }
+>                             else
+>                             {
+>                                 rip_route_node = route_next (rip_route_node);
+>                                 goto label;
+>                             }							
+>                         }
+>                     }
+>                     else   /*主网相同的summary 路由不发送*/
+>                     {
+>                         rip_route_node =route_next(rip_route_node);
+>                         goto label;
+> 
+>                     }
+>                 }
+>                 else
+>                 {   	/*主网不相同*/
+> 
+>                     goto ADDSUMPACKET;
+> 
+>                 }
+>             }
+>         }
+>         else
+>         {
+>             /*当前结点为空*/
+>             rip_route_node = route_next (rip_route_node);
+>             goto label;
+>         }
+>     ADDPACKET:      /*添加路由信息*/
+>         rip_route_item.network = rip_rthead->route_node->p.u.prefix4.s_addr; // 路由的
+>         rip_add_route_to_pkt(device_index, dest_addr, dest_port, rip_rthead, &rip_route_item);
+>         rip_route_node=route_next(rip_route_node);
+> 
+>         goto label;
+>     ADDSUMPACKET: /*添加汇聚路由信息*/
+>         rip_route_item.network=rip_get_natural_network(rip_rthead->route_node->p.u.prefix4.s_addr);
+>         if(send_version==RIP_SEND_VERSION_2_BROADCAST|| send_version==RIP_SEND_VERSION_2_MULTICAST)
+>         {
+>             rip_route_item.mask = rip_get_natural_mask(rip_route_item.network);
+>         }
+>         else rip_route_item.mask =0;
+>         rip_add_route_to_pkt(device_index,dest_addr, dest_port, rip_rthead, &rip_route_item);
+>         rip_route_node=route_next_skip_child(rip_route_node);
+>         goto label;
+>     }
+> }
+> ```
+>
+> 3.如果没有开启路由汇总
+>
+> ```c
+> for( rip_route_node = route_top( pprocess->rip_table); rip_route_node != NULL; )
+> {
+>     rip_rthead = rip_route_node->info;
+>     if( NULL != rip_rthead )
+>     {
+>         rip_no_auto_sum_updt( device_index, dest_addr, dest_port, rip_rthead );
+>     }
+>     rip_route_node = route_next(rip_route_node);
+> }
+> ```
+>
+> 
+
+#### rip_create_pkt_head
+
+```c
+void rip_create_pkt_head( uint32 device_index, uint8 cmd_type )
+```
+
+> 1.构造rip_pkt_head结构体，并填充数据包头部字段
+>
+> ```c
+> rip_pkt_head = (struct rip_pkt_head_ *)rip_send_buffer;
+> rip_pkt_head->cmd = cmd_type;
+> // 获取端口设置的send_version
+> send_version = rip_set_send_version( device_index );
+> if( send_version == RIP_SEND_VERSION_1 )
+> {
+>     /*版本1*/
+>     rip_pkt_head->version = RIP_VERSION_1;
+> }
+> else if( (send_version == RIP_SEND_VERSION_2_BROADCAST)
+>         || (send_version == RIP_SEND_VERSION_2_MULTICAST))
+> {
+>     /*版本2*/
+>     rip_pkt_head->version = RIP_VERSION_2;
+> }
+> else
+> {
+>     /*其他情况,版本2(暂时)*/
+>     rip_pkt_head->version = RIP_VERSION_2;
+> }	
+> ```
+>
+> 2.若是填充Request请求头，会根据端口设置的特殊标志，设置特定rip version版本
+>
+> ```c
+> if(cmd_type == RIP_REQUEST)
+> {
+>     if(BIT_TEST(rip_intf_array[device_index]->special_flag, RIP_SEND_V1DEMAND))
+>         rip_pkt_head->version = RIP_VERSION_1;
+>     else if(BIT_TEST(rip_intf_array[device_index]->special_flag, RIP_SEND_V2DEMAND))
+>         rip_pkt_head->version = RIP_VERSION_2;
+> }
+> 
+> /*零域*/
+> rip_pkt_head->zero = 0;
+> ```
+>
+> 3.若是认证报文，需要填充认证信息
+>
+> ```c
+> if( RIP_VERSION_2 == rip_pkt_head->version )
+> {
+>     if( (RIP_AUTH_SIMPLE == rip_intf_array[device_index]->auth_type)
+>         && (0 != strlen(rip_intf_array[device_index]->simple_key)) )
+>     {
+>         /*明文认证*/
+>         rip_simple_head = (struct rip_simple_head_ *)( rip_send_buffer + send_pkt_len );
+>         rip_simple_head->afi = htons(RIP_AUTH_AFI);
+>         rip_simple_head->authen_type = htons(RIP_AUTH_SIMPLE);
+>         /*strcpy(rip_simple_head->password, rip_intf_array[device_index]->simple_key);*/
+>         memcpy(rip_simple_head->password, rip_intf_array[device_index]->simple_key, 16);
+> 
+>         send_pkt_len += sizeof(struct rip_simple_head_);			
+>     }
+>     else if( (RIP_AUTH_MD5 == rip_intf_array[device_index]->auth_type)
+>         && (0 != strlen(rip_intf_array[device_index]->md5_key)) &&(!rip_intf_array[device_index]->dynamicflag))
+>     {
+>         /*MD5认证*/
+>         rip_md5_head = (struct rip_md5_head_ *)( rip_send_buffer + send_pkt_len );
+>         rip_md5_head->afi = htons(RIP_AUTH_AFI);
+>         rip_md5_head->authen_type = htons(RIP_AUTH_MD5);
+>         rip_md5_head->md5_keyid = rip_intf_array[device_index]->md5_keyid;
+>         rip_md5_head->sequence_number = htonl(time_sec);
+> 
+>         send_pkt_len += sizeof(struct rip_md5_head_);
+>     }
+>      else if(RIP_AUTH_DYNAMIC== rip_intf_array[device_index]->auth_type && rip_intf_array[device_index]->dynamicflag)
+>      {
+>         key =rip_intf_array[device_index]->key_list.forw;
+>         while(key != &rip_intf_array[device_index]->key_list)
+>         {
+>             if(key->key_state == RIP_NEIGHBOR_KEY_ACTIVE ||key->key_state == RIP_NEIGHBOR_KEY_EXTENSIONUSE)
+>                 keynum++;
+>             key = key->forw;
+>         }
+> 
+>         if(keynum == 0)
+>             return;
+>         else
+>         {
+>             /*选取随机的active的key*/
+>             srand( time(NULL));
+>             keyid =rand()%keynum;
+>         }
+> 
+>         key =rip_intf_array[device_index]->key_list.forw;
+>         keynum =0;
+>         while(key != &rip_intf_array[device_index]->key_list)
+>         {
+>             if(key->key_state == RIP_NEIGHBOR_KEY_ACTIVE ||key->key_state == RIP_NEIGHBOR_KEY_EXTENSIONUSE)
+>             {
+>                 if(keynum == keyid)break;
+>                 keynum++;
+>             }
+>             key = key->forw;
+>         }
+>         authen_head = (struct rip_authen_head_ *)( rip_send_buffer + send_pkt_len );
+>         authen_head->afi = htons(RIP_AUTH_AFI);
+>         authen_head->authen_type = htons(RIP_A UTH_MD5);
+>         authen_head->sequence_number = htonl(time_sec);
+>         authen_head->keyid = key->key_id;
+> 
+>         send_pkt_len += sizeof(struct rip_authen_head_);
+> 
+>      }
+> 
+> }
+> ```
+>
+> 
+
+
+
+##### rip_loopup_peer_version
+
+```c
+// 获取对端的send_version
+// * PARAMS:	device_index
+// * RETURN:	0:没有合适的version
+// 				非0:要填充到head中的version
+// *
+// * NOTE:	当端口对应的peer为一个或者对应多个peer但多个peer的version一致，返回他们他们共同的version
+// 			否则,不修改head中的version
+int rip_loopup_peer_version(uint32 device_index);
+```
+
+> 1.获取接口的rip进程信息
+>
+> ```c
+> if(rip_intf_array[device_index] == NULL)
+> 		return 0;
+> 		
+> if(!(pprocess = rip_intf_array[device_index]->pprocess))
+> {
+>     rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+>     return RIP_FAIL;
+> }
+> ```
+>
+> 2.查询接口的对端的send_version
+>
+> ```c
+> peer = pprocess->peer_list.forw;
+> while(peer != &pprocess->peer_list)
+> {
+>     if(peer->peer_intf == device_index)
+>     {
+>         peer_num ++;
+>         // 若出现多个邻居端口对一，并且版本存在不一致情况，需设置为默认版本
+>         if(peer_num > 1)
+>         {
+>             if(version != peer->rip2PeerVersion)
+>             {
+>                 version_same = FALSE;
+>                 break;
+>             }
+>         }
+>         else
+>             version = peer->rip2PeerVersion;
+>     }
+>     peer = peer->forw;
+> }
+> // 若版本都一致，需设置邻居的版本
+> if(peer_num > 0 && version_same == TRUE )
+> 	return version;
+> else
+>     return 0;
+> ```
+
+#### rip_add_route_to_pkt
+
+```c
+/*===========================================================
+函数名: rip_add_route_to_pkt
+函数功能: 将路由加入报文
+输入参数: device_index : 发送报文的端口
+		  dest_addr : 报文目的地址
+		  dest_port : 报文目的端口
+		  rip_route_info : 路由信息
+备注:
+===========================================================*/
+void rip_add_route_to_pkt( uint32 device_index, uint32 dest_addr, uint16 dest_port, struct rip_route_ * rip_route,  struct rip_route_item_ *rip_route_item)
+```
+
+> 1.初始化路由信息
+>
+> ```c
+> struct rip_route_info_ rip_route_info;
+> memset( &rip_route_info, 0, sizeof(struct rip_route_info_) );
+> 
+> rip_route_info.gw_addr = rip_route->gw_addr;
+> rip_route_info.gw_index = rip_route->gw_index;
+> rip_route_info.mask = prefix_to_mask(rip_route->route_node->p.prefixlen);
+> rip_route_info.metric = rip_route->metric;
+> rip_route_info.network = rip_route->route_node->p.u.prefix4.s_addr;
+> rip_route_info.next_hop = rip_route->next_hop;
+> rip_route_info.route_tag = rip_route->route_tag;
+> rip_route_info.route_type = rip_route->route_type;
+> ```
+>
+> 2.对即将发送的路由进行水平分割
+>
+> ```
+> /*对发送出去的路由进行水平分割过滤*/
+> ret = rip_split_check( device_index, &rip_route_info );
+> if( RIP_SUCCESS != ret )
+> {
+>     rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+>     return;
+> }
+> ```
+>
+> 3.对发送出去的路由进行filter out过滤
+>
+> ```c
+> if(rip_route->route_type==RIP_NBR_ROUTE)
+> 		gateway = (rip_route->next_hop)?(rip_route->next_hop):(rip_route->gw_addr);
+> 
+> /*对发送出去的路由进行filter out过滤*/
+> ret = rip_filter_out_check( device_index, gateway, rip_route_item );
+> if( RIP_SUCCESS != ret )
+> {
+>     rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+>     return;
+> }
+> ```
+>
+> 4.构造路由条目rip_route_item，并对字段进行检查
+>
+> ```c
+> rip_route_item->afi = htons(AF_INET);
+> /*metric*/
+> if( RIP_REDIS_ROUTE == rip_route_info.route_type )
+> {
+>     /*Fengsb 2006-02-17 shielded Yuhuiping's code 
+>     转发路由的metric之前就已经设置。yuhuiping的代码只考虑了添加转发路由
+>     的情况，删除时metric应该为16
+>     rip_route_item.metric = rip_tbl_array[vrf_id]->default_metric;
+>     */	
+>     /*fangqi modify this 2006-11-23  */
+>     /*转发路由的metric值应该为default-metric*/
+>     /*至于检测其metric值是否大于RIP_MAX_METRIC,则由rip_offset_out_check来完成*/
+>     rip_route_item->metric = htonl((rip_route->rmap_set_metric)?(rip_route_info.metric):((uint32)(pprocess->default_metric)));		
+> }
+> else
+> {
+>     rip_route_item->metric = htonl(rip_route_info.metric + 1);
+> }
+> 
+> /*对发送出去的路由进行offset out信息控制, metric*/
+> rip_offset_out_check( device_index, rip_route_item );
+> 
+> /*对路由条目的next-hop进行检查, next-hop*/
+> rip_next_hop_check( device_index, &rip_route_info, rip_route_item );
+> 
+> rip_pkt_head = (struct rip_pkt_head_ *)rip_send_buffer;
+> /*route-tag*/
+> if( RIP_VERSION_1 == rip_pkt_head->version )
+> {
+>     rip_route_item->route_tag = 0;
+> }
+> else if( RIP_VERSION_2 == rip_pkt_head->version )
+> {
+>     rip_route_item->route_tag = htons(rip_route_info.route_tag);
+> }
+> ```
+>
+> 5.对于从邻居学习到的路由，如果是未被汇总的，而本地rip缺省为自动汇总，会导致每条路由都汇总一次，最后会有多条相同的汇总路由被通告出去而可能metric不一致，导致路由振荡。
+>
+> ```c
+> //本处理可以进行部分限制，只发送一条汇总后的邻居路由
+> ret = rip_nbrrt_check_to_pkt(device_index, rip_route_item);
+> if( RIP_SUCCESS != ret )
+> {
+>     rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+>     return;
+> }
+> ```
+>
+> 6.add bfd 联动rip，bfd检测端口down,rip 发送全部16跳条目
+>
+> ```c
+> /*add bfd 联动rip，bfd检测端口down,rip 发送全部16跳条目*/
+> if(bfd_max_metric == 1)
+> 	rip_route_item->metric = RIP_MAX_METRIC;
+> ```
+>
+> 7.将路由条目加入报文
+>
+> ```
+> /*将路由条目加入报文*/
+> rip_add_item_to_pkt( device_index, dest_addr, dest_port, rip_route_item );	
+> ```
+>
+> 
+
+##### rip_split_check
+
+```c
+/*===========================================================
+函数功能: 检查端口发送出去的路由是否被水平分割禁止发送
+输入参数: device_index : 发送报文的端口
+         rip_route_info : 待检查的路由信息
+输出参数: 无
+返回值:    若报文能通过水平分割过滤,返回RIP_SUCCESS
+          若报文不能通过水平分割过滤,返回RIP_FAIL
+备注:
+===========================================================*/
+int rip_split_check( uint32 device_index, struct rip_route_info_ *rip_route_info );
+```
+
+> 1.如果端口类型为一对多，则通过；表示水平分割机制不适用，允许路由发送
+>
+> ```c
+> if( INTERFACE_DEVICE_FLAGS_NET_POINTTOMULTI == rip_intf_array[device_index]->encap_type )
+> 		return RIP_SUCCESS;
+> ```
+>
+> 2.检查该路由信息是否是从该接口收到的
+>
+> ```
+> if( (rip_route_info->gw_index == device_index)||  // 路由条目从该接口收到的
+> 		( (RIP_REDIS_ROUTE == rip_route_info->route_type) &&  // 重分发路由
+> 		   (rip_route_info->network == (rip_intf_array[device_index]->address & rip_intf_array[device_index]->mask ))
+> 		   && (rip_route_info->mask == rip_intf_array[device_index]->mask) )  )  // 这条路由
+> {
+>     if(rip_intf_array[device_index]->split_flag & RIP_POISONED_SPLIT_HORIZON_ENABLE)
+>     {
+>         /* 毒素分割启动，metric返回16  */
+>         rip_route_info->metric = RIP_MAX_METRIC;
+>         return RIP_SUCCESS;
+>     }
+>     else if ((rip_intf_array[device_index]->split_flag & RIP_SIMPLE_SPLIT_HORIZON_ENABLE) ==0)
+>     {
+>         /*毒素逆转没启动,水平分割禁止.可以发送相关路由*/
+>         return RIP_SUCCESS;
+>     }
+> 
+>     return RIP_FAIL;
+> }
+> return RIP_SUCCESS;
+> ```
+>
+> 
+
+##### rip_filter_out_check
+
+```c
+/*===========================================================
+函数名: rip_filter_out_check
+函数功能: 对发送出去的路由进行filter out过滤检查
+输入参数: device_index : 发送报文的端口
+         dest_addr : 发送报文的目的地址
+         rip_route_item:待发送出去的路由条目
+输出参数: 无
+返回值:   若报文能通过filter 过滤,返回RIP_SUCCESS
+         若报文不能通过filter 过滤,返回RIP_FAIL
+===========================================================*/
+int rip_filter_out_check( uint32 device_index, uint32 gateway, struct rip_route_item_ *rip_route_item )
+```
+
+##### rip_offset_out_check
+
+```c
+/*===========================================================
+函数名: rip_offset_out_check
+函数功能: 对接收到的路由路由进行offset信息控制
+输入参数: device_index : 发送报文的端口
+         rip_route_item : 发送的路由条目
+输出参数: 无
+返回值:   无
+备注:
+===========================================================*/
+int rip_offset_out_check( uint32 device_index,struct rip_route_item_ *rip_route_item )
+```
+
+##### rip_next_hop_check
+
+```c
+/*===========================================================
+函数名: rip_next_hop_check
+函数功能: 对发送出去路由的next-hop信息控制
+输入参数:  device_index : 发送报文端口
+          rip_route_info : 待发送出去的路由信息
+          rip_route_item : 待发送出去的路由条目
+输出参数: 无
+返回值:   无
+备注:
+===========================================================*/
+void rip_next_hop_check( uint32 device_index, struct rip_route_info_ *rip_route_info, struct rip_route_item_ *rip_route_item )
+```
+
+> ```c
+> if( RIP_VERSION_1 == rip_pkt_head->version )
+> {
+>     rip_route_item->next_hop = 0;
+> }
+> else if( RIP_VERSION_2 == rip_pkt_head->version )
+> {
+>     if( INTERFACE_DEVICE_FLAGS_NET_POINTTOPOINT != rip_intf_array[device_index]->encap_type )
+>     {
+>         /*非点对点端口*/
+>         // 首先检查下一跳是否在本地网络段，如果不在，则检查网关地址；如果两者都不在，则设置下一跳为 0。
+>         if((rip_route_info->next_hop & rip_intf_array[device_index]->mask) == (rip_intf_array[device_index]->address & rip_intf_array[device_index]->mask) )
+>         {
+>             rip_route_item->next_hop = rip_route_info->next_hop;
+>         }
+>         else if( (rip_route_info->gw_addr & rip_intf_array[device_index]->mask ) == (rip_intf_array[device_index]->address & rip_intf_array[device_index]->mask) )
+>         {
+>             rip_route_item->next_hop = rip_route_info->gw_addr;
+>         }
+>         else
+>         {
+>             rip_route_item->next_hop = 0;
+>         }
+>     }
+>     else
+>     {
+>         /*点对点端口*/
+>         rip_route_item->next_hop = 0;
+>     }
+> }
+> 
+> ```
+
+
+
+##### rip_add_item_to_pkt
+
+```c
+/*===========================================================
+函数名: rip_add_item_to_pkt
+函数功能: 将路由条目加入报文
+输入参数: device_index : 发送报文端口
+	     dest_addr : 发送报文目的地址
+	     dest_port : 发送报文的目的端口
+		 rip_route_item : 待发送的路由条目
+输出参数: 无
+返回值:   无
+备注:
+===========================================================*/
+void rip_add_item_to_pkt( uint32 device_index, uint32 dest_addr, uint16 dest_port, struct rip_route_item_ *rip_route_item );
+```
+
+> 1.若是RIPv2
+>
+> - md5验证
+>
+> ```c
+> if( (RIP_VERSION_2 == rip_pkt_head->version)
+> 		&& (RIP_AUTH_MD5 == rip_intf_array[device_index]->auth_type)
+> 		&& (0 != strlen(rip_intf_array[device_index]->md5_key)) && (!rip_intf_array[device_index]->dynamicflag))
+> {
+>     /*MD5认证报文*/
+>     if( (send_pkt_len + sizeof(struct rip_route_item_)) >= (RIP_MAX_PACKET_SIZE - sizeof(struct rip_md5_tail_)) )
+>     {
+>         /*填充MD5报文尾部*/
+>         rip_md5_head = (struct rip_md5_head_ *)(rip_send_buffer + sizeof(struct rip_pkt_head_));
+>         rip_md5_head->packet_len = htons(send_pkt_len);
+> 
+>         rip_md5_tail = (struct rip_md5_tail_ *)( rip_send_buffer + send_pkt_len);
+>         rip_md5_tail->afi = htons(RIP_AUTH_AFI);
+>         rip_md5_tail->route_tag = htons(RIP_MD5_TAIL_TAG);
+> 
+>         memcpy( rip_md5_tail->password, rip_intf_array[device_index]->md5_key, 16);
+>         // auth_data_len
+>         rip_md5_head->authen_data_len = sizeof(rip_md5_tail->afi) + sizeof(rip_md5_tail->route_tag) + sizeof(rip_md5_tail->password);
+> 
+>         send_pkt_len += rip_md5_head->authen_data_len;
+> 		// 计算md5校验和
+>         rt_md5_cksum( (byte *)rip_send_buffer, send_pkt_len, send_pkt_len, rip_md5_tail->password, (uint32 *)0 );
+> 
+>         /*发送报文*/
+>         ret = rip_send_packet( device_index, dest_addr, dest_port, rip_send_buffer, send_pkt_len );
+>         if( RIP_SUCCESS != ret )
+>         {
+>             rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+>             return;
+>         }
+> 
+>         offset = sizeof(struct rip_pkt_head_) + sizeof(struct rip_md5_head_);
+>         memset( (rip_send_buffer + offset), 0, (RIP_MAX_PACKET_SIZE - offset) );
+>         memcpy((rip_send_buffer + offset ), rip_route_item, sizeof(struct rip_route_item_) );
+> 
+>         /*发送报文长度复位*/
+>         send_pkt_len = offset + sizeof(struct rip_route_item_);
+>         send_item_len = sizeof(struct rip_pkt_head_) + sizeof(struct rip_route_item_);
+>     }
+>     else
+>     {
+>         /*累加发送报文长度*/
+>         memcpy((rip_send_buffer + send_pkt_len ), rip_route_item, sizeof(struct rip_route_item_) );
+>         send_pkt_len += sizeof(struct rip_route_item_);
+>         send_item_len += sizeof(struct rip_route_item_);
+>     }
+> ```
+>
+> - 明文验证
+>
+>   ```c
+>   else if( (RIP_VERSION_2 == rip_pkt_head->version)
+>   		    && (RIP_AUTH_SIMPLE == rip_intf_array[device_index]->auth_type)
+>   		    && (0 != strlen(rip_intf_array[device_index]->simple_key) ) )
+>   {
+>       if( (send_pkt_len + sizeof(struct rip_route_item_)) >  RIP_MAX_PACKET_SIZE )
+>       {
+>           /*发送报文*/
+>           ret = rip_send_packet( device_index, dest_addr, dest_port, rip_send_buffer, send_pkt_len );
+>           if( RIP_SUCCESS != ret )
+>           {
+>               rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+>               return;
+>           }
+>   
+>           offset = sizeof(struct rip_pkt_head_) + sizeof(struct rip_simple_head_);
+>           memset( (void *)(rip_send_buffer + offset), 0, (RIP_MAX_PACKET_SIZE - offset) );
+>           memcpy((rip_send_buffer + offset ), rip_route_item, sizeof(struct rip_route_item_) );
+>   
+>           /*发送报文长度复位*/
+>           send_pkt_len = offset + sizeof(struct rip_route_item_);
+>           send_item_len = sizeof(struct rip_pkt_head_) + sizeof(struct rip_route_item_);
+>       }
+>       else
+>       {
+>           memcpy((rip_send_buffer + send_pkt_len ), rip_route_item, sizeof(struct rip_route_item_) );
+>   
+>           /*累加发送报文长度*/
+>           send_pkt_len += sizeof(struct rip_route_item_);
+>           send_item_len += sizeof(struct rip_route_item_);
+>       }
+>   }
+>   ```
+>
+> - 邻居间动态认证
+>
+>   ```c
+>   else if( (RIP_VERSION_2 == rip_pkt_head->version)
+>   		    && (RIP_AUTH_SIMPLE == rip_intf_array[device_index]->auth_type)
+>   		    && (0 != strlen(rip_intf_array[device_index]->simple_key) ) )
+>   {
+>       if( (send_pkt_len + sizeof(struct rip_route_item_)) >  RIP_MAX_PACKET_SIZE )
+>       {
+>           /*发送报文*/
+>           ret = rip_send_packet( device_index, dest_addr, dest_port, rip_send_buffer, send_pkt_len );
+>           if( RIP_SUCCESS != ret )
+>           {
+>               rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+>               return;
+>           }
+>   
+>           offset = sizeof(struct rip_pkt_head_) + sizeof(struct rip_simple_head_);
+>           memset( (void *)(rip_send_buffer + offset), 0, (RIP_MAX_PACKET_SIZE - offset) );
+>           memcpy((rip_send_buffer + offset ), rip_route_item, sizeof(struct rip_route_item_) );
+>   
+>           /*发送报文长度复位*/
+>           send_pkt_len = offset + sizeof(struct rip_route_item_);
+>           send_item_len = sizeof(struct rip_pkt_head_) + sizeof(struct rip_route_item_);
+>       }
+>       else
+>       {
+>           memcpy((rip_send_buffer + send_pkt_len ), rip_route_item, sizeof(struct rip_route_item_) );
+>   
+>           /*累加发送报文长度*/
+>           send_pkt_len += sizeof(struct rip_route_item_);
+>           send_item_len += sizeof(struct rip_route_item_);
+>       }
+>   }
+>   ```
+>
+> 2.如果是版本1
+>
+> ```c
+> if( (send_pkt_len + sizeof(struct rip_route_item_)) >  RIP_MAX_PACKET_SIZE )
+> {
+>     /*发送报文*/
+>     ret = rip_send_packet( device_index, dest_addr, dest_port, rip_send_buffer, send_pkt_len );
+>     if( RIP_SUCCESS != ret )
+>     {
+>         rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+>         return;
+>     }
+> 
+>     offset = sizeof(struct rip_pkt_head_);
+>     memset( (void *)(rip_send_buffer + offset), 0, (RIP_MAX_PACKET_SIZE - offset) );
+>     memcpy((rip_send_buffer + offset ), rip_route_item, sizeof(struct rip_route_item_) );
+> 
+>     /*发送报文长度复位*/
+>     send_pkt_len = offset + sizeof(struct rip_route_item_);
+>     send_item_len = sizeof(struct rip_pkt_head_) + sizeof(struct rip_route_item_);
+> }
+> else
+> {
+>     memcpy((rip_send_buffer + send_pkt_len ), rip_route_item, sizeof(struct rip_route_item_) );
+> 
+>     /*累加发送报文长度*/
+>     send_pkt_len += sizeof(struct rip_route_item_);
+>     send_item_len += sizeof(struct rip_route_item_);
+> }
+> ```
+>
+> 
+
+
+
+#### rip_no_auto_sum_updt ？？
+
+```c
+/*===========================================================
+函数名: rip_no_auto_sum_updt
+函数功能: 对发送出去路由路由不进行auto-summary过滤
+输入参数: device_index : 发送报文端口
+         rip_rthead : 待发送出去的路由信息
+输出参数: rip_route_item : 待发送出去的路由条目
+返回值:    路由通过auto-summary过滤,返回RIP_SUCCESS
+          路由不能通过auto-summary过滤,返回RIP_FAIL
+备注:		禁止自动汇总时的常规更新
+===========================================================*/
+int rip_no_auto_sum_updt(uint32 device_index, uint32 dest_addr, uint16 dest_port, struct rip_route_ * rip_rthead)
+```
+
+> 1.填充数据包中ip address、mask字段
+>
+> ```c
+> struct rip_route_item_ rip_route_item;
+> memset( &rip_route_item, 0, sizeof(struct rip_route_item_) );
+> rip_route_item.network = rip_rthead->route_node->p.u.prefix4.s_addr;
+> if( RIP_VERSION_1 == rip_pkt_head->version )
+> {
+>     rip_route_item.mask = 0;
+> }
+> else if( RIP_VERSION_2 == rip_pkt_head->version )
+> {
+>     rip_route_item.mask = prefix_to_mask(rip_rthead->route_node->p.prefixlen);
+> }	
+> ```
+>
+> 2.根据路由信息的类型，进行填充
+>
+> ```c
+> // 若是汇总路由，则不发送
+> if(rip_rthead->route_type == RIP_SUMMARY_ROUTE)
+> {   /*在no auto sum 的时候，汇总路由不发，但是要发送从邻居学习到的路由*/
+>     if(rip_rthead->equi_route_num > 1)
+>     {
+>         rip_route = rip_rthead->forw; 
+>         for( count = 1; count < rip_rthead->equi_route_num; rip_route = rip_route->forw, count++ )
+>         {
+>             // 寻找其中的一个路由，其下一跳通过当前设备
+>             if(rip_route->gw_index == device_index)
+>             {
+>                 rip_rthead = rip_route;
+>                 break;
+>             }
+>         } 
+>         if(rip_rthead->route_type == RIP_SUMMARY_ROUTE)rip_rthead=rip_rthead->forw;
+>         rip_add_route_to_pkt( device_index, dest_addr, dest_port, rip_rthead, &rip_route_item );
+>     }				
+> }
+> ```
 >
 > 
 
@@ -2141,7 +3260,150 @@ int rip_auth_seq_check(uint32 device_index, uint32 src_address, uint32 seq_numbe
 
 
 
+#### rip_send_packet
 
+```c
+/*===========================================================
+函数名: rip_send_packet
+函数功能: 发送RIP报文
+输入参数: device_index : 发送报文的端口
+          dest_addr : 发送报文的目的地址
+          dest_port : 发送报文的目的端口
+          packet :发送的RIP报文
+          pkt_len : 发送报文的长度
+输出参数: 无
+返回值: 处理成功,返回RIP_SUCCESS
+        处理失败,返回RIP_FAIL
+=============================================================*/
+int rip_send_packet( uint32 device_index, uint32 dest_addr, uint16 dest_port, void *packet, uint32 pkt_len );
+```
+
+> 1.对输入参数进行合法性检查
+>
+> ```
+> /*输入参数合法性检验*/
+> if( ( device_index > INTERFACE_DEVICE_MAX_NUMBER )
+>     || ( 0 == dest_addr )
+>     || ( NULL == packet )
+>     || ( pkt_len > RIP_MAX_PACKET_SIZE ) )
+> {
+>     rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+>     return RIP_FAIL;
+> }
+> ```
+>
+> 2.检查目的ip地址是否是自己端口的ip
+>
+> ```c
+> /*IP不能向自己发送*/
+> if( ( !BIT_TEST( rip_intf_array[device_index]->state ,RIP_INTF_PROCESS_ACTIVE))
+>     || (dest_addr == rip_intf_array[device_index]->address))
+> {
+>     rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+>     return RIP_FAIL;
+> }
+> ```
+>
+> 3.查看目的ip是否是组播地址
+>
+> ```c
+> /*定义变量初始化*/
+> uint32 value[2];
+> value[0] = dest_addr;    // 地址
+> value[1] = device_index; // 端口
+> if( dest_addr == htonl(RIP_MULTICAST_ADDRESS) ) 
+> {
+>     // 针对组播通信的端口配置，用于多对多的组播数据包传输
+>     ret = so_setsockopt( rip_glb_info.socket_id, IPPROTO_IP, IP_MULTICAST_PORT, (char *)value, sizeof( value ) );
+>     if( ret < 0 )
+>     {
+>         rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d (%d).\n",__FILE__,__LINE__,ret);
+>         return RIP_FAIL;
+>     }
+> }else{
+>     // 进行单播通信的端口配置，适用于一对一的数据包传输
+>     ret = so_setsockopt( rip_glb_info.socket_id, IPPROTO_IP, IP_PORT, (char *)value, sizeof( value ) );
+>     if( ret <0 )
+>     {
+>         rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d (%d).\n",__FILE__,__LINE__,ret);
+>         return RIP_FAIL;
+>     }
+> }
+> ```
+>
+> 4.设置目的地socket
+>
+> ```c
+> memset( (void *)&socket, 0, sizeof(struct soaddr_in) );
+> socket.sin_len = sizeof( struct soaddr_in );
+> socket.sin_family = AF_INET;
+> socket.sin_addr.s_addr = dest_addr;
+> socket.sin_port = dest_port;
+> ```
+>
+> 5.发送数据包
+>
+> ```c
+> ret = so_sendto ( rip_glb_info.socket_id, packet, pkt_len, MSG_DONTROUTE, (struct soaddr *)&socket, sizeof(struct sockaddr_in) );
+> if( ret != pkt_len )
+> {
+>     rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d (%d).\n",__FILE__,__LINE__,ret);
+>     return RIP_FAIL;
+> }
+> rip_intf_array[device_index]->rip2IfStatSentUpdates++;
+> ```
+>
+> 
+
+### rip_get_route
+
+```c
+//函数功能: 根据网络信息获取对应的路由
+//输入参数: rip_route_item : 网络信息
+//         rip_tbl_info: RIP路由表
+struct rip_route_ *rip_get_route( struct rip_route_item_ *rip_route_item, struct route_table *table  );
+```
+
+> 1.获取路由条目的子网掩码
+>
+> ```c
+> uint32 mask;
+> if( 0 == rip_route_item->mask)
+> {
+>     mask = rip_get_mask( rip_route_item->network );
+> }
+> else
+> {
+>     mask = rip_route_item->mask;
+> }
+> ```
+>
+> 2.在路由表中查找与构造的前缀匹配的路由节点
+>
+> ```c
+> struct route_node *rip_route_node;
+> struct rip_route_ *rip_route_head;
+> struct prefix route_node_prefix;
+> 
+> memset( (void *)&route_node_prefix, 0, sizeof(struct prefix) );
+> route_node_prefix.family = AF_INET;     					   // IPv4
+> route_node_prefix.safi = SAFI_UNICAST;  					   // 单播地址
+> route_node_prefix.prefixlen = (u_char)mask_to_prefix( mask);   // 根据子网掩码获取前缀长度
+> route_node_prefix.u.prefix4.s_addr = rip_route_item->network;  // 要查找的网络地址
+> 
+> rip_route_node = route_node_lookup(table, &route_node_prefix ); // 在路由表中查找与构造的前缀匹配的路由节点
+> if( rip_route_node != NULL )
+> {
+>     route_unlock_node( rip_route_node );
+> 
+>     rip_route_head = rip_route_node->info;
+>     if( rip_route_head->equi_route_num >= 1 )  // 如果等价路由数量大于或等于 1，则返回该路由信息。
+>     {
+>         return rip_route_head;
+>     }
+> }
+> return NULL;
+> ```
 
 ### rip_del_route_node
 
