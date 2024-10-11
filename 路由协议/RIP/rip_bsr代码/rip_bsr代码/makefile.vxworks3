@@ -1,0 +1,80 @@
+#***********************************************************************#
+#*                                                                     *#
+#*   MODULE:  configs/rules-lib.x86-win32                              *#
+#*   AUTHOR:  Fengsb.                                                  *#
+#*   DATE:    2007/04/03  					                                   *#
+#*   PURPOSE: This file contains the makefile rules for building the   *#
+#*	      library     					                                       *#
+#*                                                                     *#
+#***********************************************************************#
+
+LIBNAME=librip.a
+LIBNAME_2	= mpls_rip.a
+LIBDIRNAME=objrip
+
+EXTRA_INCLUDE= -I$(ROUTER_BASE)/include \
+	-I$(ROUTER_BASE)/apps/$(ROUTER_NAME)
+
+SUBDIRS	=
+OBJS    = rip_main.o rip_init.o rip_cmd.o \
+					rip_debug.o rip_show.o rip_intf.o \
+					rip_packet.o rip_timer.o rip_redis.o\
+					rip_mib.o rip_version.o
+
+OBJS_2	= rip_main_vrf.o 	rip_init_vrf.o rip_cmd_vrf.o \
+			rip_debug_vrf.o 		rip_show_vrf.o rip_intf_vrf.o \
+			rip_packet_vrf.o		rip_timer_vrf.o rip_redis_vrf.o\
+			rip_mib_vrf.o       rip_version_vrf.o
+			
+# Now we fix up where they will go once they are built
+LIBOBJS_2        = $(foreach file, $(OBJS_2), $(LIBDIR)\$(file))
+
+include $(ROUTER_BASE)/configs/rules.library
+
+CFLAGS += -DINCLUDE_ROUTING -DROUTING_MODULE -DMULTICORE -DVRF_MODULE 
+
+CFLAGS_2 = $(CFLAGS)
+CFLAGS_2 += -DVRF_MODULE 
+
+#CC_OPTIM= -O2 -fno-strict-aliasing 
+##############################################################################
+
+.PHONY :$(LIB_DIR)\$(LIBNAME_2)
+$(LIB_DIR)\$(LIBNAME_2) : $(MAKE_LIBDIR) $(LIBOBJS_2)
+	@ $(RM) $(subst /,$(DIRCHAR),$@)
+	$(AR) crs $@ $(LIBOBJS_2)
+
+			
+# rules to build objects in $(LIBDIR)
+$(LIBDIR)\rip_main_vrf.o : rip_main.c
+	$(CC) $(CFLAGS_2) $(CFLAGS_$(<:.c=.o)) $(OPTION_OBJECT_ONLY) $(OPTION_OBJECT_NAME)$@ $<
+
+$(LIBDIR)\rip_init_vrf.o : rip_init.c
+	$(CC) $(CFLAGS_2) $(CFLAGS_$(<:.c=.o)) $(OPTION_OBJECT_ONLY) $(OPTION_OBJECT_NAME)$@ $<
+
+$(LIBDIR)\rip_cmd_vrf.o : rip_cmd.c
+	$(CC) $(CFLAGS_2) $(CFLAGS_$(<:.c=.o)) $(OPTION_OBJECT_ONLY) $(OPTION_OBJECT_NAME)$@ $<
+
+$(LIBDIR)\rip_debug_vrf.o : rip_debug.c
+	$(CC) $(CFLAGS_2) $(CFLAGS_$(<:.c=.o)) $(OPTION_OBJECT_ONLY) $(OPTION_OBJECT_NAME)$@ $<
+
+$(LIBDIR)\rip_show_vrf.o : rip_show.c
+	$(CC) $(CFLAGS_2) $(CFLAGS_$(<:.c=.o)) $(OPTION_OBJECT_ONLY) $(OPTION_OBJECT_NAME)$@ $<
+
+$(LIBDIR)\rip_intf_vrf.o : rip_intf.c
+	$(CC) $(CFLAGS_2) $(CFLAGS_$(<:.c=.o)) $(OPTION_OBJECT_ONLY) $(OPTION_OBJECT_NAME)$@ $<
+
+$(LIBDIR)\rip_packet_vrf.o : rip_packet.c
+	$(CC) $(CFLAGS_2) $(CFLAGS_$(<:.c=.o)) $(OPTION_OBJECT_ONLY) $(OPTION_OBJECT_NAME)$@ $<
+
+$(LIBDIR)\rip_timer_vrf.o : rip_timer.c
+	$(CC) $(CFLAGS_2) $(CFLAGS_$(<:.c=.o)) $(OPTION_OBJECT_ONLY) $(OPTION_OBJECT_NAME)$@ $<
+
+$(LIBDIR)\rip_redis_vrf.o : rip_redis.c
+	$(CC) $(CFLAGS_2) $(CFLAGS_$(<:.c=.o)) $(OPTION_OBJECT_ONLY) $(OPTION_OBJECT_NAME)$@ $<
+
+$(LIBDIR)\rip_mib_vrf.o : rip_mib.c
+	$(CC) $(CFLAGS_2) $(CFLAGS_$(<:.c=.o)) $(OPTION_OBJECT_ONLY) $(OPTION_OBJECT_NAME)$@ $<
+			
+$(LIBDIR)\rip_version_vrf.o : rip_version.c
+	$(CC) $(CFLAGS_2) $(CFLAGS_$(<:.c=.o)) $(OPTION_OBJECT_ONLY) $(OPTION_OBJECT_NAME)$@ $<

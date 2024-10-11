@@ -1,0 +1,18 @@
+PSS_ROOT=../..
+CC           = @echo "Making     $@  \tfrom   $<";dcc
+#------------------------------------------------------------------------
+# Librarian command name and options
+#------------------------------------------------------------------------
+LIB          = dar
+LIBOPTS      = -qf
+LIBOPTS_SORT = -sR
+
+include rules.mk
+
+
+clean:
+	@echo "Cleaning ..."
+	@rm -f ram.coff *.cfe *.cof *.elf ram.* rom.* *.a
+	@rm -f *.o *.map *.hex *.x *.opt *.L app.* qpsos.tmp
+	@rm -rf $(OBJ_DIR)
+	@echo "OK."

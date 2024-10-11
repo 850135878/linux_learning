@@ -1,0 +1,26 @@
+#***********************************************************************#
+#*                                                                     *#
+#*   MODULE:  configs/rules-lib.x86-win32                              *#
+#*   AUTHOR:  YuHuiPing.                                               *#
+#*   DATE:    2003/11/17  					       *#
+#*   PURPOSE: This file contains the makefile rules for building the   *#
+#*	      library     					       *#
+#*                                                                     *#
+#***********************************************************************#
+
+LIBNAME=librip.a
+LIBDIRNAME=objrip
+
+EXTRA_INCLUDE= -I$(SWITCH_BASE)/include \
+	       -I$(SWITCH_BASE)/apps/$(SWITCH_NAME) \
+	       -I$(SWITCH_BASE)/include/rip
+
+SUBDIRS	=
+OBJS    =  rip_main.o rip_init.o rip_cmd.o rip_debug.o rip_show.o rip_intf.o \
+	rip_packet.o rip_timer.o rip_redis.o rip_mib.o rip_version.o
+
+include $(SWITCH_BASE)/configs/rules.library
+
+CFLAGS += -DMPLS_VRF
+
+CC_OPTIM= -O0 -g
