@@ -481,69 +481,7 @@ Response报文主要用于更新对方的路由表，通常在以下三种情况
 
 ![image-20241011103227575](./RIP.assets/image-20241011103227575.png)
 
-## Router Map
-
-<img src="./RIP.assets/image-20241011131742533.png" alt="image-20241011131742533" style="zoom:50%;" />
-
-- 使用match命令匹配特定的分组或路由，set修改分组或路由属性
-
-  | match命令匹配        | 说明                                           |
-  | -------------------- | ---------------------------------------------- |
-  | **match ip address** | 匹配访问列表或前缀列表                         |
-  | match length         | 根据分组的第三层长度进行匹配                   |
-  | match interface      | 匹配下一跳为指定接口之一的路由                 |
-  | match ip next-hop    | 匹配下一跳路由器地址获得防伪列表之一允许的路由 |
-  | match metric         | 匹配具有指定度量值的路由                       |
-  | match route-type     | 匹配指定类型的路由                             |
-  | **match community**  | 匹配BGP共同体                                  |
-  | **match tag**        | 根据路由标记进行匹配                           |
-
-  | set命令                 | 说明                              |
-  | :---------------------- | --------------------------------- |
-  | **set metric**          | 设置路由的度量值                  |
-  | **set metric-type**     | 设置目标路由协议的度量值类型      |
-  | set default interface   | 指定报文的默认出接口              |
-  | **set interface**       | 指定报文的出接口                  |
-  | set ip default next-hop | 指定默认转发的下一跳              |
-  | **set ip next-hop**     | 指定转发的下一跳                  |
-  | set next-hop            | 指定下一跳的地址，指定BGP的下一跳 |
-  | set as-path             |                                   |
-  | set community           |                                   |
-  | set local-preference    |                                   |
-  | set weight              |                                   |
-  | set origin              |                                   |
-  | set tag                 |                                   |
-
-  > default关键字优先级低于明细路由
-
-- Router-map中的语句相当于访问列表中的各行
-
-- Router-map默认为permit，默认序列号10，序列号不会自动递增，需要自行指定
-
-- 末尾隐含deny any(不匹配，与acl deny any丢弃不一样)
-
-- 单条match语句包括多个条件时，使用or逻辑运算；多条match语句时，使用and逻辑运算
-
-![image-20241011132354173](./RIP.assets/image-20241011132354173.png)
-
-### 示例
-
-```c
-route-map test permit/deny(不匹配) 10
-match x1     // 换行，是”且“，都要匹配
-match x2,x3  
-set y
-    
-route-map test permit/deny(不匹配) 20
-match x2,x3  // ”或“匹配
-set y
-```
-
-<img src="./RIP.assets/image-20241011140205881.png" alt="image-20241011140205881" style="zoom:50%;" />
-
-> router rip
->
-> 》redistribute ospf 1 route-map test
+> 
 
 
 
