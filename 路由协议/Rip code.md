@@ -115,30 +115,125 @@ struct MESSAGE_PARAM
 ### route_table
 
 ```c
-struct route_table{
+/* Routing table top structure. */
+/* 路由表结构，用来操作路由表，常在添加、删除、查找路由信息时使用 */
+struct route_table
+{
+    /* 某个路由表的入口(头指针)，用来指向第一个route_node节点，如二叉树中的根节点 */
 	struct route_node *top;
-}
+	
+	/* vrf identifier. */
+	uint32 vrf_id; /* 该路由表所属的vrf(每个vrf对应一个路由表) */
+};
 ```
 
 ### route_node
 
 ```c
-struct route_node{
-	struct prefix p;
-	struct route_table *table;
-	struct route_node *parent;
-	struct route_node *link[2];
-#define l_left link[0];
-#define r_right link[1];
-	unsigned int lock;
-	void *info;
-	void *aggregate;
-}
+/* Each routing entry.  用来存储路由信息 */
+struct route_node
+{
+	/* Actual prefix of this radix. */
+	struct prefix p; /* 该路由节点具体的网段信息 */
+
+	/* Tree link. */
+	struct route_table *table; /* 指向该路由节点所属的路由表的入口地址 */
+	struct route_node *parent; /* 指向父节点(二叉树上的) */
+	struct route_node *link[2]; /* 左右子树的头结点 */
+#define l_left   link[0]    /* 左孩子 */
+#define l_right  link[1]    /* 右孩子 */
+
+	/* Lock of this radix */
+	/* 在操作过程中对该路由节点的锁定，以避免删除引起的非法访问等问题，
+	实际上就是一个引用计数，为0时需删除该节点，非0时不能删除 */
+	uint32 lock;
+
+	/* Each node of route. */
+	void *info; /* 用来保存具体的路由信息 */
+	void *node_info[1]; /* 可以用来保存一些附加信息，比如具体的激活路由等 */
+
+	uint32 flags;
+	uint32 exf_operating;  /*note this node whether is being added to exf for rtv6lc*/
+	
+#define rn_data flags
+#define rn_value exf_operating
+
+#ifdef INCLUDE_ADJACENCY_TABLE
+    /*供egress使用的记录信息*/
+	uint32 egrcookie;
+#endif
+};
 ```
 
 
 
 ![image-20241008150321881](./Rip code.assets/image-20241008150321881.png)
+
+### route_distance
+
+```c
+/* XXXXXX: Route distance object is identified by source and mask pair. */
+/* Route Distance structure. */
+struct route_distance {
+	struct route_distance *prev;
+	struct route_distance *next;
+	struct route_distance_list *list;
+	
+	/* Use this to filter the route source address. */
+	struct prefix prefix_source;
+
+	unsigned char distance;	/* route distance, 0 is invalide */
+	
+	/* Use acl to filter the route destination address. */
+	unsigned long acl_id;
+	char *acl_name;
+	void *acl;
+};
+
+/* Route Distance structure list */
+struct route_distance_list {
+	struct route_distance_list *next;
+
+	unsigned long long protocol;	/* Route protocol flag. */
+	unsigned long process;			/* Route protocol process. */
+	uint32 vrfid;					/* vrfid */
+
+	void (*func)(unsigned long long, unsigned long, uint32 vrfid);/* Function used to refresh routes. */
+	unsigned char default_distance;	/* Default distance. 0 is invalide */
+	
+	struct route_distance *head;	/* Head of route distance list. */
+	struct route_distance *tail;	/* Tail of route distance list. */
+};
+```
+
+
+
+### prefix
+
+```c
+/* IPv4 and IPv6 unified prefix structure. */
+struct prefix
+{
+  u_int8_t family;
+  u_int8_t prefixlen;
+  u_int8_t prefix_style;
+  u_int8_t pad1;
+  union
+  {
+    u_int8_t prefix;
+    struct in_addr prefix4;
+#ifdef HAVE_IPV6
+    struct in6_addr prefix6;
+#endif /* HAVE_IPV6 */
+    struct
+    {
+      struct in_addr id;
+      struct in_addr adv_router;
+    } lp;
+    u_int8_t val[9];
+  } u;
+};
+```
 
 
 
@@ -3657,3 +3752,448 @@ int rip_intf_creat_timer(uint32 device_index)
 >     return RIP_FAIL;
 > }
 > ```
+
+
+
+
+
+<img src="./Rip code.assets/image-20241014104050403.png" alt="image-20241014104050403" style="zoom:67%;" />
+
+<img src="./Rip code.assets/image-20241014104302972.png" alt="image-20241014104302972" style="zoom:67%;" />
+
+rip_peer->peer_addr == rip_route->gw_addr?? gw_addr在哪设置的
+
+## expire_timer
+
+- 如果路由一直不更新 >= 180s
+
+  - 若该路由存在等价路由
+
+    - 将路由从gw_index的学习列表中删除
+
+    ```c
+    device_index = rip_route->gw_index;
+    rip_route_list_temp = rip_route->nbr_ptr;
+    if(rip_route_list_temp)
+    {
+        REMQUE( rip_route_list_temp );
+        rip_mem_free( rip_route_list_temp, RIP_ROUTE_LIST_TYPE );
+        rip_intf_array[device_index]->nbr_route_num--;
+        rip_route->nbr_ptr = NULL;
+    }
+    ```
+
+    - 从路由表中删除
+
+    ```
+    
+    ```
+
+    
+
+  - 若不存在
+
+    ```c
+    *路由进入holddown状态*/
+    rip_add_holddown( rip_route );	
+    
+     /*通知主路由表路由状态的改变*/
+    rip_change_notify( rip_route );
+    ```
+
+
+
+route_unlock_node
+
+```c
+int route_unlock_node(struct route_node *node)
+{
+	if (node == NULL) return -1;
+	if (node->lock > 0) node->lock--;	
+	else 
+        syslog(LOG_CRIT, "RTLIB: node 0x%x lock value is 0 before unlock it!\n", node);
+	if (node->lock == 0)
+		return route_node_delete(node);
+	return 0;
+}
+
+```
+
+# 汇总路由
+
+> rip_recv_request 》 rip_send_response 》 rip_no_auto_sum_updt
+>
+> 需要查看汇总路由的构建？rip_rthead->route_type == RIP_SUMMARY_ROUTE
+>
+> 转发进来的路由一定放在rip_route_head(除非有默认路由);
+> 同样的，对于本地直连路由创建的汇总路由也这样处理
+
+```c
+if(rip_rthead->route_type == RIP_SUMMARY_ROUTE)
+{   /*在no auto sum 的时候，汇总路由不发，但是要发送从邻居学习到的路由*/
+    if(rip_rthead->equi_route_num > 1)
+    {
+        rip_route = rip_rthead->forw; 
+        for( count = 1; count < rip_rthead->equi_route_num; rip_route = rip_route->forw, count++ )
+        {
+            /*if(rip_route->route_type == RIP_SUMMARY_ROUTE)
+                continue;*/
+            if(rip_route->gw_index == device_index)
+            {
+                rip_rthead = rip_route;
+                break;
+            }
+        } 
+        if(rip_rthead->route_type == RIP_SUMMARY_ROUTE)rip_rthead=rip_rthead->forw;
+        rip_add_route_to_pkt( device_index, dest_addr, dest_port, rip_rthead, &rip_route_item );
+    }				
+}
+else if((rip_rthead->route_type==RIP_REDIS_ROUTE) || (rip_rthead->route_type==RIP_DEF_ROUTE))
+{		
+    rip_add_route_to_pkt( device_index, dest_addr, dest_port, rip_rthead, &rip_route_item );
+}
+else
+{
+    if(rip_rthead->equi_route_num > 1)
+    {
+        rip_route = rip_rthead; 
+        for( count = 1; count <= rip_rthead->equi_route_num; rip_route = rip_route->forw, count++ )
+        {
+            if(rip_route->gw_index == device_index)
+            {
+                rip_rthead = rip_route;
+                break;
+            }
+        }                
+    }
+    rip_add_route_to_pkt( device_index, dest_addr, dest_port, rip_rthead, &rip_route_item );
+}	
+```
+
+汇总发送时
+
+```
+if (rip_get_natural_network (rip_route_node->p.u.prefix4.s_addr)
+						== rip_get_natural_network (rip_intf_array[device_index]->address) ) /*主网相同*/
+{
+    if( rip_rthead->route_type != RIP_SUMMARY_ROUTE )
+    {
+        if(send_version == RIP_SEND_VERSION_2_BROADCAST || send_version == RIP_SEND_VERSION_2_MULTICAST)
+        {
+            /****版本2  下,只要自然网络相同均发送*/
+            rip_route_item.mask = prefix_to_mask (rip_rthead->route_node->p.prefixlen);
+            goto ADDPACKET;
+        }
+        else
+        {
+            // 版本1，主机路由或子网掩码与接口一致，直接发送
+            if (prefixlen == 32 || (prefix_to_mask(prefixlen)==(rip_intf_array[device_index]->mask)) )
+            {
+                rip_route_item.mask =0;
+                goto ADDPACKET;
+            }
+            else
+            {
+                rip_route_node = route_next (rip_route_node);
+                goto label;
+            }							
+        }
+    }
+    else   /*主网相同的summary 路由不发送*/
+    {
+        rip_route_node =route_next(rip_route_node);
+        goto label;
+
+    }
+}
+else
+{   	/*主网不相同*/
+    // 若发送的路由自然网段与接口不一致，则需要对路由汇总后再发送
+    goto ADDSUMPACKET;
+
+}
+```
+
+
+
+- rip_route->route_type==RIP_NBR_ROUTE何时设置？
+
+```c
+if(rip_route->route_type==RIP_NBR_ROUTE)
+		gateway = (rip_route->next_hop)?(rip_route->next_hop):(rip_route->gw_addr);
+```
+
+- rip_route_item->next_hop 
+
+  > rip_next_hop中设置的
+
+  ```c
+  if( INTERFACE_DEVICE_FLAGS_NET_POINTTOPOINT != rip_intf_array[device_index]->encap_type )
+  {
+      /*非点对点端口*/
+      // 
+      if((rip_route_info->next_hop & rip_intf_array[device_index]->mask) == (rip_intf_array[device_index]->address & rip_intf_array[device_index]->mask) )
+      {
+          rip_route_item->next_hop = rip_route_info->next_hop;
+      }
+      else if( (rip_route_info->gw_addr & rip_intf_array[device_index]->mask ) == (rip_intf_array[device_index]->address & rip_intf_array[device_index]->mask) )
+      {
+          rip_route_item->next_hop = rip_route_info->gw_addr;
+      }
+      else
+      {
+          rip_route_item->next_hop = 0;
+      }
+  }
+  else
+  {
+      /*点对点端口*/
+      rip_route_item->next_hop = 0;
+  }
+  ```
+
+  
+
+![image-20241015162310304](./Rip code.assets/image-20241015162310304.png)
+
+
+
+```
+# head     next
+默认路由 -> 重分布路由 -> 邻居路由
+重分布路由 -> 汇总路由 -> 邻居路由
+
+rip_route->gw_index = device_index; # 收到路由的端口
+rip_route->gw_addr = src_addr;      # 发送路由更新的源ip地址
+```
+
+
+
+
+
+
+
+# RIP配置命令
+
+## 全局配置态
+
+### router rip
+
+使用router rip 全局命令来配置RIP实例，no router rip 则关闭RIP实例。
+
+> 必须先启动RIP实例，才能进入路由实例配置态，才能配置RIP实例的各种全局性参数，而配置与接口相关的参数则不受是否已经启动RIP实例的限制。 
+
+
+
+## rip全局配置态
+
+### 1. allow-ecmp
+
+**默认关闭**
+
+> 开启功能后rip路由表会存储多个等价路由，否则只会存储一个，存储的是最开始的路由，新来的等价路由会忽略。
+
+- auto-ecmp命令激活等价路由功能
+- no auto-ecmp命令则关闭等价路由功能
+
+```
+router rip 
+    auto-ecmp
+```
+
+
+
+### 2. default-information
+
+**默认关闭**
+
+> 开启后，无条件的在rip本地路由表中生成一条缺省路由，在发送路由更新时，携带0.0.0.0/0路由信息
+
+- **default-information** **originate**：产生一条缺省路由
+- **no default-information** **originate**：关闭这个功能
+
+```
+router rip 
+    default-information originate
+```
+
+
+
+### 3. default-metric
+
+**默认为1**          范围：[1-16]
+
+> 用于设定将其它路由协议的路由导入到RIP报文中时使用的缺省路由代价。
+>
+> 当使用redistribute命令导入其它协议路由时，如果不指定具体的路由代价，则以default-metric所指定的缺省路由代价导入。 
+
+- **default-metric [number] 设定导入路由的缺省路由代价**
+- **no default-metric 恢复缺省设置**
+
+```cmd
+# 宣告来自OSPF的路由导入到RIP的路由权值
+router rip 
+    default-metric 8
+	redistribute ospf 
+```
+
+
+
+### 4. network
+
+使用命令后，会将接口绑定到某个rip实例中，成为该实例的rip接口，并且生成接口对应的直连网段作为rip路由；
+
+每个接口只能关联一个rip实例
+
+- **network {** ifname**|** prefix **}**：前者是端口名，后者是端口网段` A.B.C.D[/mask]`
+- **no network {** ifname**|** prefix **}**
+
+> network 可以指明端口名也可以指明网段，指明网段会自己查找对应端口。当端口有多个地址时，指明网段只会作用于该网段，而指明端口会作用于端口上多个地址。
+
+```cmd
+router rip
+	network g0
+	network 192.168.0.0/16
+```
+
+
+
+### 5. neighbor
+
+使用neighbor命令定义以单播交换路由信息的邻居设备，no neighbor 取消该邻居。
+
+- neighbor ip-address：指明交换路由信息的邻居设备的IP地址
+- no neighbor ip-address
+
+> neighbor命令指定需要定点传送的地址，这主要是为了应付某些不能以广播地址发送的特定非广播网的特殊需求。
+
+```
+router rip
+	neighbor 131.108.20.4  # 允许使RIP更新发送给指定的邻居
+```
+
+
+
+### 6. offset-list
+
+使用offset-list 命令对通过RIP学习到的（入站或出站）路由权值加上一个偏移量，no offset-list取消增加偏移量。
+
+- **offset-list** *access-list-name* {**in** **|** **out**}  *<ifname* |all> *offset_value*
+
+- **no** **offset-list** *access-list-name* {**in** **|** **out**}  *<ifname* |all> *offset_value*
+
+| 参数                 | 参数说明                                     |
+| -------------------- | -------------------------------------------- |
+| in                   | 对入站的路由权值 应用 访问列表               |
+| out                  | 对出站的路由权值 应用 访问列表               |
+| **access-list-name** | 被应用的标准访问列表代号或名字。             |
+| Offset_value         | 正的偏移量，应用于匹配访问列表网络的路由权值 |
+| *ifname*             | (可选的)端口名 ，(不选，默认全部端口)        |
+
+```
+offset-list abc in 10 g0
+```
+
+
+
+### 7. timers basic
+
+使用 timers basic 配置命令调整RIP网络的常规**更新计时器**、**超时计时器**，**回收计时器**，no timers basic 恢复缺省的各类计时器
+
+- **timers basic update timeout garbage**
+- **no timers basic** 
+
+|  参数   | 参数说明                                                     |
+| :-----: | ------------------------------------------------------------ |
+| update  | 路由器基本的计时参数，指定路由更新发送的时间间隔(单位：秒)，缺省值是30秒。 |
+| timeout | 路由被宣告为无效的时间间隔（单位：秒），至少是参数update的三倍。如果没有刷新路由的更新到来，该路由成为无效路由，进入阻止状态，被标记为不可访问和不可到达的。缺省值是180秒。 |
+| garbage | 指定路由删除的时间间隔(单位：秒)，缺省值是120秒。（抑制时间） |
+
+```
+router rip 
+	timers basic 5 30 20
+```
+
+
+
+### 8. version
+
+> 默认按照在每个端口上的配置发送和接收rip分组
+>
+> 若端口没有配置version，则按rip的自适应规则选择peer的version，若尚未有peer，则发送缺省的RIP-2的分组。
+
+使用version 【1/2】命令设定RIP的版本，no version则恢复缺省值
+
+> 可以在接口上指定可用的RIP版本，使用ip rip receive version 和 ip rip send version 命令
+>
+> 否则将按照全局的配置版本发送接收RIP报文。
+
+
+
+
+
+## 接口配置态
+
+### 1. ip rip authentication
+
+默认不认证，RIPv1不支持
+
+> 用于指定RIP-2包的认证类型
+
+- **ip rip authentication mode { md5 | text}**
+
+- **ip rip authentication { key-chain | string} \<key-chain/password\>：指的RIPv2的MD5认证key-chain或明文认证密码(最大16字符)**
+- **no ip rip authentication {key-chain | string} ：取消相应的认证密码**
+
+```cmd
+interface g0
+	ip rip authentication mode text
+	ip rip authentication string 123456
+```
+
+
+
+### 2. ip rip receive/send version
+
+默认接收/发送RIP-1和RIP-2的分组
+
+- **ip rip receive/send version** [1] [2]：指定接口允许接收/发送哪个版本的RIP包
+- **no ip rip receive/send version ：** 指定接口不允许接收/发送任何版本
+
+```cmd
+interface g0
+	ip rip receive version 1 2 # 配置接口可以接收版本1和2的RIP包
+	ip rip receive version 1   # 配置接口只可以接收版本1的RIP包
+```
+
+
+
+### 3. ip rip split-horizon
+
+默认是简单水平分割
+
+- **ip rip split-horizon** **[poisoned-reverse ]**：开启带毒性逆转的水平分割
+- **no ip rip split-horizon** **[poisoned-reverse ]**：关闭带毒性逆转的水平分割
+
+```cmd
+interface g0
+	ip rip split-horizon poisoned-reverse
+```
+
+
+
+### 4. ip rip v2-broadcast
+
+默认是v1 广播v2组播】
+
+- **ip rip** **v2-broadcast**：开启该功能，v2报文将不再以组播发送，只以广播方式发送
+- **no ip rip** **v2-broadcast**
+
+```
+interface g0
+	ip rip v2-broadcast
+```
+
+
+
+- 
