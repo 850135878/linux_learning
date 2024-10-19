@@ -3977,11 +3977,131 @@ rip_route->gw_addr = src_addr;      # 发送路由更新的源ip地址
 
 ## 全局配置态
 
-### router rip
+### 1. router rip
 
-使用router rip 全局命令来配置RIP实例，no router rip 则关闭RIP实例。
+用于配置RIP实例，no router rip 则关闭RIP实例。
 
 > 必须先启动RIP实例，才能进入路由实例配置态，才能配置RIP实例的各种全局性参数，而配置与接口相关的参数则不受是否已经启动RIP实例的限制。 
+
+
+
+### 2. show ip rip [status]
+
+显示RIP实例的所有RIP路由，或实例相关配置信息及路由统计。
+
+> 加了status，展示实例相关配置信息及路由统计。
+
+```cmd
+# 显示所有的RIP路由
+Router(config)#show ip rip 
+Codes: R - RIP, C - connected, S - Static, O - OSPF, B - BGP
+Sub-codes:
+      (n) - normal, (s) - static, (d) - default, (r) - redistribute,
+      (i) - interface
+
+     Network            Next Hop         Metric From            Tag Time
+C(i) 22.2.2.0/24        0.0.0.0               1 self              0
+```
+
+```cmd
+# 显示RIP实例的相关配置信息及路由统计信息
+Router(config)#show ip rip status 
+Routing Protocol is "rip"
+  Sending updates every 30 seconds with +/-50%, next due in 9 seconds
+  Timeout after 180 seconds, garbage collect after 120 seconds
+  Outgoing update filter list for all interface is not set
+  Incoming update filter list for all interface is not set
+  Default redistribution metric is 1
+  Redistributing: ospf
+  Default version control: send version 2, receive any version 
+    Interface        Send  Recv   Key-chain
+    loop1            1     1 2    
+  Routing for Networks:
+    loop1
+  Routing Information Sources:
+    Gateway          BadPackets BadRoutes  Distance Last Update
+  Distance: (default is 120)
+      
+(n) - normal, (d) - default, (r) - redistribute, (i) - interface
+
+Sub_type             ALL-Routes           Active-Routes  (vrf default)
+i                    1                    1                    
+------
+Totals               1                    1 
+```
+
+
+
+### 3. show ip rip_export
+
+显示RIP实例的**配置命令信息**以及**输出json格式**
+
+- **show ip rip_export {network|neighbor|interface|ifname name} [json]**
+
+|    参数     | 参数说明               |
+| :---------: | ---------------------- |
+| nointerface | 实例配置不显示端口配置 |
+|   network   | network配置            |
+|  neighbor   | neighbor配置           |
+|  interface  | 端口配置               |
+|   ifname    | 指定端口配置显示       |
+|    name     | 端口名                 |
+|    json     | 指定json 格式参数      |
+
+
+
+### 4. debug rip events
+
+监视路由事件
+
+```
+Router# debug rip events
+update timer fire!
+SEND UPDATE to g0.1 ifindex 18
+multicast announce on g0.1 
+
+RIP: RECV packet from 182.168.200.22 port 520 on g0.1 (VRF default)
+```
+
+| 域             | 描述           |
+| :------------- | -------------- |
+| 182.168.200.22 | 接收报文源地址 |
+| g0.1           | 发送或接受端口 |
+| VRF            | 端口所属vrf    |
+
+
+
+### 5. debug rip packet
+
+监视RIP收发的报文
+
+```cmd
+RIP: RECV RESPONSE version 2 packet size 44
+RIP:   123.123.123.0/24 -> 0.0.0.0 family 2 tag 1 metric 1
+RIP:   222.2.0.0/16 -> 0.0.0.0 family 2 tag 0 metric 1
+```
+
+|        域         |            描述            |
+| :---------------: | :------------------------: |
+|     SEND/RECV     |  表示是发送还是接收的报文  |
+| 123.123.123.0/24  |    路由信息中的目的网络    |
+|    -> 0.0.0.0     |         下一跳地址         |
+|    version 1/2    | 发送或者接收的报文的版本号 |
+| RESPONSE/ REQUEST |          报文类型          |
+|      size 44      |          报文长度          |
+|        tag        |          认证标记          |
+|      metric       |         路由的代价         |
+
+### 6. debug rip zebra
+
+监视RIP与zebra联动事件，如路由的添加到zebra和端口状态变化等。 
+
+```cmd
+Router# debug rip zebra
+RIP: Install into zebra: 222.2.0.0/24
+RIP: interface va1000 vrf 0 index 21 flags 1090 metric 0 mtu 1500 is down
+RIP: interface delete va1000 vrf 0 index 21 flags 0x1090 metric 0 mtu 1500
+```
 
 
 
@@ -3993,12 +4113,12 @@ rip_route->gw_addr = src_addr;      # 发送路由更新的源ip地址
 
 > 开启功能后rip路由表会存储多个等价路由，否则只会存储一个，存储的是最开始的路由，新来的等价路由会忽略。
 
-- auto-ecmp命令激活等价路由功能
-- no auto-ecmp命令则关闭等价路由功能
+- allow-ecmp命令激活等价路由功能
+- no allow-ecmp命令则关闭等价路由功能
 
 ```
 router rip 
-    auto-ecmp
+    allow-ecmp
 ```
 
 
@@ -4130,6 +4250,118 @@ router rip
 
 
 
+### 9. distance
+
+> 管理距离是一个从0到255的整数。一般情况下，这个数值越高，可信任度就越低。
+>
+> 如果命令中使用了可选参数访问列表access-list-name，这个访问列表在一条网络路由被插入路由表时被应用。这样做可以根据提供路由信息的路由器地址对某些网路进行过滤。 
+
+设置RIP路由的管理距离
+
+- **distance weight [ address/len [ access-list-name ]]**
+- **no distance weight [ address/len [ access-list-name ]]**
+
+| 参数             | 参数说明                                                     |
+| ---------------- | ------------------------------------------------------------ |
+| weight           | 管理距离，范围从1到255。建议使用范围从10到255（0~9保留）。如果这个参数单独使用，它告诉系统软件在没有关于某一路由信息源的相关规定时，就用它作为缺省的管理距离。管理距离为255的路由不会加入在路由表中。 |
+| address          | (可选的) 源IP地址（形式为aa.bb.cc.dd）                       |
+| len              | (可选项) IP地址掩码长度。如果长度与address不匹配，软件将忽略地址中相应位的值。 |
+| access-list-name | (可选项)标准访问列表名字。                                   |
+
+```cmd
+# 从192.1.1.0/24网络接收的路由，其distance值设为100。
+router rip
+	distance 100 192.1.1.0/24
+```
+
+
+
+### 10. distribute-list
+
+对接收和发送的RIP路由进行过滤。
+
+- **distribute-list [ access-list-name | prefix prefix-list-name ] { in | out } { iframe | * }**
+- **no distribute-list [ access-list-name | prefix prefix-list-name ] { in | out } { iframe | * }**
+
+| 参数             | 参数说明                                                     |
+| ---------------- | ------------------------------------------------------------ |
+| access-list-name | **标准IP访问列表**名字，这个列表定义了在路由更新中哪些网络被接收，哪些网络被抑制。 |
+| prefix-list-name | 标准IP prefix列表名字，这个列表定义了在路由更新中哪些网络被接收，哪些网络被抑制。 |
+| ***\*in/out\**** | 对进站/出站路由更新应用访问列表。                            |
+| ifname           | (可选项) 在哪个接口上对进站/出站更新应用访问列表。如果没有接口被指定，将对所有进站/出站更新应用访问列表。 |
+
+```cmd
+# 从端口g0发送出去的路由10.0.0.0/8被过滤。
+ip access-list-rip mylsit deny 10.0.0.0/8 
+
+router rip 
+	distribute-list mylist out g
+```
+
+
+
+### 11. redistribute
+
+重分布其他协议路由到rip 路由表中。同时可以指定重分布进来的路由跳数以及过滤路由。
+
+- **redistribute protocol [ metric metric | route-map name ]**
+- **no redistribute protocol [ metric metric | route-map name ]**
+
+| 参数         | 参数说明                                     |
+| ------------ | -------------------------------------------- |
+| **protocol** | 指定协议名。 connect、isis、ospf、static...  |
+| metric       | （可选）指定重分布进来的路由跳数(1-16)。     |
+| name         | 〔可选〕配置只能引入符合指定路由策略的路由。 |
+
+```
+router rip 
+	redistribute ospf 
+```
+
+
+
+### 12. route-map
+
+对接收和发送的RIP路由进行route-map策略过滤
+
+- **route-map map-name { in | out } ifname**
+- **no route-map map-name { in | out } ifname**
+
+| 参数             | 参数说明                                    |
+| ---------------- | ------------------------------------------- |
+| map-name         | route-map 策略。                            |
+| ***\*in/out\**** | 对进站/出站路由更新 策略route-map过滤。     |
+| ifname           | 在哪个接口上对进站/出站更新 应用route-map。 |
+
+```cmd
+route-map-rip maprip deny 10 
+match metric 10 
+
+# 从端口g0发送出去的路由跳数等于10的路由被过滤。可以匹配多项，也可以调用acl进行过滤
+router rip 
+	route-map maprip out g0
+```
+
+
+
+### 13. passive-interface
+
+指定端口不发送更新报文，即只收不发。使用no redistribute 命令取消该该行为。
+
+- **passive-interface { iframe | default }**
+- **no passive-interface**
+
+| 参数    | 参数说明               |
+| ------- | ---------------------- |
+| ifname  | 指定端口名。           |
+| default | 默认该实例下所有端口。 |
+
+```cmd
+# 指定g0口只收不发rip报文。
+router rip 
+	passive-interface g0 
+```
+
 
 
 ## 接口配置态
@@ -4150,6 +4382,81 @@ interface g0
 	ip rip authentication mode text
 	ip rip authentication string 123456
 ```
+
+
+
+#### 其他设备命令配置
+
+```cmd
+# 在端口模式下开启端口的动态认证
+# 默认设置，端口发送和接收到rip设置为version2，并且配置的key的有效时间参考了系统的当前时间
+# - 若当前存在激活的key，发送报文的时候将从激活状态的key中随机选择一个key对报文进行认证摘要计算；当接收到报文后，将依据报文中key id从端口中选择对应的key，然后对报文进行验证，通过则处理路由条目，否则丢弃。
+# - 若当前不存在激活状态的key（刚配置key，而无key生效），当端口设置了rip的version2，则发送非认证报文，且接收到认证报文后直接丢弃;若收到非认证报文，则接收。
+ip rip authentication dynamic
+# 进入配置动态认证密钥
+
+ip rip dynamic_authen_key {key_id, algorithms[md5|sha1], key, start_time,lift_time} {……}
+
+# 删除key_id的key 
+# 需要考虑key的当前状态 
+# - 若key的生效时间段已经过时，从端口的key timeout链表中删除
+# - 若key的生效时间段未到，直接删除
+# - 若key正在被使用，停止该key的使用，若当前还有别的key亦在此时间段有效，do no thing ；否则进入非认证状态
+no ip rip dynamic_authen_key {key_id, algorithms[md5|sha1] }
+
+# 停止端口的动态认证
+# 但维护key状态的模块仍会不断改变key的状态
+no ip rip authentication dynamic
+
+# 在配置模式下，则删除端口下全部关于动态认证的配置；若无配置动态认证，do nothing
+config >> no interface e1/1   
+```
+
+> ​	针对每个rip端口，设置两个动态key的链表，在启用认证前或者认证过程中，可以随时输入新key，防止key消耗殆尽的情况.
+>
+> ​	对于peer两端配置的key要求一致，比如key的start_time，lift time，此时peer两端最好以标准时间为参考（保证配置的key对应同一个时间段）。
+
+
+
+**Key链表**
+
+> 在端口下有**两个key链表**
+>
+> 1. key list保存了**尚未生效**或**正在生效**或**延长lift time的key**
+> 2. 而key timeout list中保存了**已经失效了的key**，被移植到timeout中的key将不会再次被使用。
+>
+> ​	在添加key的时候，模块将根据key的开始生效时间和系统的当前时间，然后根据key的lift time判断将key放置到哪个链表中。在key的开始生效时间尚未到达，设置key的标准为VALID，并根据**key的开始生效时间的大小从早到晚**插入到key list的双向链表中
+>
+> ​	在配置key开始生效时间的时候，一般配置的格式为xxxx-xx-xx-xx:xx，年-月-日-时（24小时制）:分 ，其中md5的key最大为16个字符，sha1最大20个字符。
+
+
+
+**定时器**
+
+> 当端口上配置了动态认证后，将会启动两个定时器。
+>
+> - 定时器1：每隔一分钟查询一次的key生效的定时器。
+>
+> - 定时器2：每隔一分钟查询一次的key超时的定时器。
+>
+> 在动态认证的情况下，系统会选择有效的key对要发送的报文进行动态认证摘要，当前有多个有效的key的时候，将随机选择一个key认证。
+
+> 在动态认证的端口上收到报文的时候，将按动态认证处理。
+>
+> - 若不是**动态认证报文**或者**收到的报文中的key id在系统内已经失效**、或者**不存在相应的key**、或者key id对应的key对报文进行摘要运算后将丢弃该报文。
+
+- 当key的开始有效时间一到达
+
+  1. 设置key状态为active
+
+  2. 若当前有EXTERSIONUSE状态的key，将该EXTERSIONUSE 的key，从端口的key list链表中删除，并添加到端口下的key timeout list链表中
+
+- 当key有效期超时
+  1. 若当前还有别的key为active状态
+     1. 直接将该key从key list链表移到key timeout list中，并设置为EXPIRE标志
+  2. 否则，延长最后一个key的lift time
+
+
 
 
 
