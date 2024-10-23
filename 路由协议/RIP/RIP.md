@@ -101,6 +101,18 @@ IOU1(config-if)#ip summary-address rip 172.16.0.0 255.255.0.0
 
 <img src="./RIP.assets/image-20240925164531125.png" alt="image-20240925164531125" style="zoom: 50%;" />
 
+若抑制定时器超时了，会遍历holddown_list、
+
+​	将超时的路由rip_route从①gw_index的学习列表（只对学习到的邻居路由）、②路由表删除
+
+​	若该holddown状态的路由没超时，则获取最近一次即将超时的时间
+
+最后重新启动定时器。
+
+​	
+
+
+
 ##### 1.5 触发更新
 
 一旦路由表发送变化，马上触发路由更新。

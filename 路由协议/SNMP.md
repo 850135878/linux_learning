@@ -1,6 +1,19 @@
 # SNMP
 
-SNMP（Simple Network Manager Protocol）简单网络管理协议。
+SNMP（Simple Network Manager Protocol）简单网络管理协议（**应用层协议**）。
+
+- 基于UDP协议的，在管理设备（Server）和被管理设备（Agent）之间传递信息。
+- 可通过SNMP采集设备运行状态信息
+- 可通过SNMP对设备进行管理
+- 可通过SNMP设备主动向管理站告警
+
+
+
+Agent Port：161
+
+Server Port：162
+
+
 
 
 
@@ -24,7 +37,7 @@ SNMP（Simple Network Manager Protocol）简单网络管理协议。
 
 ## 2. 三个组成部分
 
-**基于TCP/IP的网络管理**分为三个组成部分：
+**SNMP网络管理**包括三个部分：
 
 - MIB（管理信息库）：包含**所有代理进程**的所有**可被查询和修改**的**参数**
 - SMI（Structure of Management Information 管理信息结构）：包含MIB中公用的结构和表达符号
@@ -38,7 +51,7 @@ SNMP（Simple Network Manager Protocol）简单网络管理协议。
 
 ### 3.1 五种报文
 
-<img src="./SNMP.assets/image-20240929092947481.png" alt="image-20240929092947481" style="zoom: 67%;" />
+<img src="./SNMP.assets/image-20241021095643141.png" alt="image-20241021095643141" style="zoom: 50%;" />
 
 **管理进程发出的报文：**
 
@@ -46,6 +59,23 @@ SNMP（Simple Network Manager Protocol）简单网络管理协议。
 - **get-next-request报文**：从代理进程**【获取】**一个或多个参数的**下一个参数值**
 
 - **set-request报文**：**【设置】**代理进程的一个或多个参数值
+
+|            SNMPv1报文类型            |                             说明                             |
+| :----------------------------------: | :----------------------------------------------------------: |
+|           **get-request**            |             **从代理进程处提取一个或多个参数值**             |
+|         **get-next-request**         |       **从代理进程处提取紧跟当前参数值的下一个参数值**       |
+|           **set-request**            |              **设置代理进程的一个或多个参数值**              |
+|           **get-response**           | **返回的一个或多个参数值。这个操作是由代理进程发出的，它是前面三种操作的响应操作** |
+| **SNMPv1-Trap** **(GP,SP,Trap-OID)** |    **代理进程主动发出的报文，通知管理进程有某些事情发生**    |
+
+
+
+|    SNMPv2报文类型     |               说明                |
+| :-------------------: | :-------------------------------: |
+|   **informRequest**   |      带有**确认报文**的通知       |
+| SNMPv2-Trap(Trap-OID) |   **Trap的分类方式与v1有不同**    |
+|  **GetBulkRequest**   | 针对多个oid连续取多次get-next操作 |
+|        Report         |         Inform的确认报文          |
 
 
 
@@ -96,9 +126,246 @@ SNMP报文由两部分组成：报文头和报文体（也被称为PDU，协议�
 
 对象标识是一个整数序列，以[`.`]分隔。例如，所有的MIB变量是从1.3.6.1.2.1这个标识开始的。
 
+
+
 <img src="./SNMP.assets/image-20240929100622346.png" alt="image-20240929100622346" style="zoom:67%;" />
+
+- 单实例叶子  1.3.6.1.2.1.1.2
+
+  > 1.3.6.1.2.1.1.2.**0**  ->  增加一个0表示一个对象
+
+- 多实例叶子（表格）
+
+  > //  注意： 当一个OID为表格时，可能存在多索引
+  >
+  > 1.3.6.1.2.1.2.2.1.2.**X** -> X表示索引值
+
+
 
 ## 4. MIB
 
-管理信息库，含有**所有代理进程包含的**、并且**能够被管理进程进行查询和设置**的信息集合/
+管理信息库，含有**所有代理进程包含的**、并且**能够被管理进程进行查询和设置**的信息集合。
+
+MIB是一个树形结构，SNMP协议消息通过遍历MIB树形目录中的节点来访问网络中的设备
+
+| 字段                                                         | 说明                                  |
+| :----------------------------------------------------------- | ------------------------------------- |
+| Name:sysDescr                                                | 节点名称                              |
+| Type:OBJECT-TYPE                                             | 节点类型，还有可能是NOTIFICATION-TYPE |
+| OID:1.3.6.1.2.1.1.1                                          | OID节点的值                           |
+| Full path:iso(1).org(3).dod(6).internet(1).mgmt(2).mib-2(1).system(1).sysDescr(1) |                                       |
+| Module:RFC1213-MIB                                           | 所属的mib模块名称                     |
+| Parent:system                                                | 父节点名称                            |
+| Next sibling:sysObjectID                                     | 下一个节点名称                        |
+| Numerical syntax:Octets                                      | 数据类型                              |
+| Base syntax:OCTET STRING                                     | 数据基础类型                          |
+| Composed syntax:DisplayString                                | 数据组合类型                          |
+| Status:mandatory                                             |                                       |
+| Max access:read-only                                         | 读写权限                              |
+| Size list:1: 0..255                                          | 数据长度建议                          |
+| Description:	A textual description of the entity.  This value should include the full name and version identification of the system‘s hardware type, software operating-system, and networking software.  It is mandatory that this only contain printable ASCII characters. | 节点描述信息                          |
+
+
+
+
+
+## 5. MIB Browser
+
+### 5.1 配置
+
+- SNMPv1 **write/read community 设置**
+- SNMPv2 **Get-bulk 设置**
+- SNMPv3 **user/group 设置**
+
+### 5.2 MIB Browser的SNMP基本操作
+
+- Get/Set/Walk 操作 Table View等
+
+### 5.3 给添加MIB Browser 添加MIB
+
+- 编译MIB不能有中文路径
+- 在MIB Browser中添加/删除已编译的MIB
+
+
+
+
+
+## 6. BDCOM SNMP模块
+
+### 6.1 三个进程
+
+- SNMP主进程侦听161端口，接收回复报文
+- SNMT轮询发送trap线程
+- SNMK发送KEEPALIVE trap线程
+
+### 6.2 SNMP基础设置
+
+- 配置SNMP Community：读写权限ACL等
+- 配置trap host：trap/inform
+- 其他的一些配置无关紧要
+
+
+
+### 6.3 接口结构体variable
+
+```c
+// 注册MIB时的主要结构体，根据oid name长度的不同，
+// 分成variable2 ，variable4， variable7，  variable8， variable13
+struct variable13 {
+    u_char          magic;          /* 作为提示功能 */
+    u_char          type;           /* 变量的类型 */
+    u_short         acl;            /* 变量的Access Control List */
+    FindVarMethod  *findVar;        /* Get函数，查找该变量时的回调函数 */
+    u_char          namelen;        /* 下面oid name的长度 */
+    oid             name[13];       /* oid标识 */
+};
+```
+
+- 常用数据类型
+
+  ```c
+  // 另外可以进行整形枚举，需要与mib文件中一致
+  ASN_BOOLEAN
+  ASN_INTEGER
+  ASN_BIT_STR
+  ASN_OCTET_STR
+  ASN_IPADDRESS
+  ASN_COUNTER
+  ASN_TIMETICKS
+  ASN_INTEGER64
+  ASN_COUNTER64
+  ```
+
+```c
+struct variable13 rip2_variables[] =
+{	
+    // 一般来说同一组的MIB变量定义相同的FindVarMethod通过variable结构中的magic变量来识别访问哪个MIB变量。
+	{RIP2GLOBALROUTECHANGES,ASN_COUNTER,RONLY,rip_mib_global,2,{1, 1}},
+	{RIP2GLOBALQUERIES, ASN_COUNTER, RONLY, rip_mib_global, 2, {1, 2}},
+
+	{RIP2IFSTATADDRESS, ASN_IPADDRESS, RONLY, rip_mib_intf_stat, 3, {2, 1, 1}},
+	{RIP2IFSTATRCVBADPKTS, ASN_COUNTER, RONLY, rip_mib_intf_stat, 3, {2, 1, 2}},
+	{RIP2IFSTATRCVBADROUTES, ASN_COUNTER, RONLY, rip_mib_intf_stat, 3, {2, 1, 3}},
+	{RIP2IFSTATSENTUPDATES, ASN_COUNTER, RONLY, rip_mib_intf_stat, 3, {2, 1, 4}},
+	{RIP2IFSTATSTATUS, ASN_INTEGER, RWRITE, rip_mib_intf_stat, 3, {2, 1, 5}},
+
+	{RIP2IFCONFADDRESS, ASN_IPADDRESS, RONLY, rip_mib_intf_conf, 3, {3, 1, 1}},
+	{RIP2IFCONFDOMAIN, ASN_OCTET_STR, RWRITE, rip_mib_intf_conf, 3, {3, 1, 2}},
+	{RIP2IFCONFAUTHTYPE, ASN_INTEGER, RWRITE, rip_mib_intf_conf, 3, {3, 1, 3}},
+	{RIP2IFCONFAUTHKEY, ASN_OCTET_STR, RWRITE, rip_mib_intf_conf, 3, {3, 1, 4}},
+	{RIP2IFCONFSEND, ASN_INTEGER, RWRITE, rip_mib_intf_conf, 3, {3, 1, 5}},
+	{RIP2IFCONFRECEIVE, ASN_INTEGER, RWRITE, rip_mib_intf_conf, 3, {3, 1, 6}},
+	{RIP2IFCONFDEFAULTMETRIC,ASN_INTEGER, RWRITE, rip_mib_intf_conf, 3, {3, 1, 7}},
+	{RIP2IFCONFSTATUS, ASN_INTEGER, RWRITE, rip_mib_intf_conf, 3, {3, 1, 8}},
+	{RIP2IFCONFSRCADDRESS, ASN_IPADDRESS, RWRITE, rip_mib_intf_conf, 3, {3, 1, 9}},
+
+	{RIP2PEERADDRESS, ASN_IPADDRESS, RONLY, rip_mib_peer, 3, {4, 1, 1}},
+	{RIP2PEERDOMAIN, ASN_OCTET_STR, RONLY, rip_mib_peer, 3, {4, 1, 2}},
+	{RIP2PEERLASTUPDATE, ASN_TIMETICKS, RONLY, rip_mib_peer, 3, {4, 1, 3}},
+	{RIP2PEERVERSION, ASN_INTEGER, RONLY, rip_mib_peer, 3, {4, 1, 4}},
+	{RIP2PEERRCVBADPKTS, ASN_COUNTER, RONLY, rip_mib_peer, 3, {4, 1, 5}},
+	{RIP2PEERRCVBADROUTES, ASN_COUNTER, RONLY, rip_mib_peer, 3, {4, 1, 6}}
+};
+```
+
+#### FindVarMethod
+
+```c
+/**
+* 在定义注册到subtree的MIB变量数组时，每个MIB变量都需要定义一个如何访问这个变量的查找函数FindVarMethod，一般来说同一组的MIB变量定义相同的FindVarMethod通过variable结构中的magic变量来识别访问哪个MIB变量。
+* Params:
+* 		struct variable *vp: IN vp指向访问的MIB变量的variable结构
+*		oid *name: IN/OUT需要访问MIB变量的标识符
+*		int *length: IN/OUT name的长度
+*		int exact: IN时候精确匹配，get/set时为true，getnext时为false
+*		int *var_len: OUT指明返回值得长度
+*		WriteMethod **write_method:OUT MIB变量的写操作函数
+* Return:
+*	返回值为找到变量值的头指针。长度由参数中的var_len决定，类型由注册的mib决定，即vp-> type。
+**/
+u_char * FindVarMethod( struct variable *vp, oid *name, int *length, int exact, int *var_len, WriteMethod **write_method);
+
+
+
+```
+
+##### WriteMethod
+
+```c
+/**
+* 每个有写权限的MIB变量的FindVarMethod函数中必需将函数指针write_method设为这个MIB变量的写函数。
+* Params:
+*	var_val为MIB变量的设置值
+*	var_val_type为值的类型
+*	var_val_len为值的长度
+*	statP为FindVarMethod的返回值
+*	name为MIB变量的Object ID
+*	length为name的长度
+* Return:
+*	成功返回SNMP_ERR_NOERROR，否则返回其它值（注：返回的错误类型见snmp.h）
+*/
+typedef int (WriteMethod)(int action, u_char *var_val, u_char var_val_type,     int var_val_len, u_char  *statP, oid *name, int length);
+```
+
+SNMP模块会将action设为以下几种值多次调用write_method：
+
+```c
+#define RESERVE1    0
+#define RESERVE2    1
+#define ACTION	    2
+#define COMMIT      3	/*只需要处理这种情况，其他的情况return即可*/
+#define UNDO        5
+#define ACTION_FREE		6
+#define FINISHED_SUCCESS        9
+#define FINISHED_FAILURE	10
+```
+
+
+
+- 示例
+
+```c
+/*===========================================================
+函数名: rip_mib_global
+函数功能: MIB全局信息
+输入参数: 
+输出参数: 
+返回值:      
+备注:
+===========================================================*/
+u_char *rip_mib_global(struct variable *vp, oid *name, int *length, int exact, int *var_len, int (**write_method) (int, u_char *, u_char, int, u_char *, oid *, int))
+{
+	static uint32 long_return;
+	struct rip_process_info_ *pprocess;
+	struct rip_process_list_ *pprocess_list;
+
+	long_return = 0;
+	
+	if( MATCH_FAILED == header_rip(vp, name, length, exact, var_len, write_method) )
+	{
+		return NULL;
+	}
+
+	if((pprocess_list = rip_process_list.forw) == &rip_process_list)
+		return NULL;
+	pprocess = pprocess_list->rip_process_info;
+	
+	switch (vp->magic) 
+	{
+	case RIP2GLOBALROUTECHANGES:
+		long_return = pprocess->rip2GlobalRouteChanges;
+		return (u_char *)&long_return;
+		break;
+	case RIP2GLOBALQUERIES:
+		long_return = pprocess->rip2GlobalQueries;
+		return (u_char *)&long_return;
+		break;
+	default:
+		assert(0);
+		break;
+	}
+	
+	return NULL;
+}
+```
 

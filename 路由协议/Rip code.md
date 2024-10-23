@@ -3971,6 +3971,879 @@ rip_route->gw_addr = src_addr;      # 发送路由更新的源ip地址
 
 
 
+# rip_cmds
+
+## router rip
+
+```C
+/*router rip的命令*/
+struct cmds rip_cmd_router_tab[] =
+{
+	{
+		"rip",    				// 命令名称
+		MATCH_AMB,				// 匹配模式
+		cmdPref(PF_CMDNO, 0, 0),// 权限等级
+		0,						
+		rip_cmd_router_rip,
+		NULL,
+		NULL,
+		0,
+		0,
+		"rip	--Enable Routing Information Protocol(RIP) ",
+		"rip	--启动RIP或进入RIP配置",
+		NULLCHAR,
+		NULLCHAR,
+	},
+	
+	{ NULLCHAR }
+};
+
+/*===========================================================
+函数名:   rip_cmd_router_rip
+函数功能: router rip命令解析
+输入参数: argc/argv :命令参数
+          u   : 命令用户
+输出参数: 无
+返回值:   处理成功,返回RIP_CMD_SUCCESS
+          处理失败,返回RIP_CMD_FAIL
+备注:
+=============================================================*/
+int rip_cmd_router_rip(int argc, char **argv, struct user *u)
+{
+	return subcmd(rip_cmd_process_tab , NULL,argc , argv , u);
+}
+
+struct cmds rip_cmd_process_tab[] =
+{
+	{
+		"1234567890",
+		MATCH_DIG,
+		cmdPref(PF_CMDNO, 0, 0),
+		0,
+		rip_cmd_rip_process,
+		NULL,
+		NULL,
+		0,
+		0,
+		"<1-65535>        -- RIP Process ID",
+		"<1-65535>        -- RIP协议进程号", 
+		NULLCHAR,
+		NULLCHAR,
+	},
+	
+	{ NULLCHAR }
+};
+```
+
+### rip_cmd_rip_process
+
+```c
+// router rip processid命令处理函数
+int rip_cmd_rip_process(int argc, char **argv, struct user *u)
+{
+	int rc = 0;
+	uint32 processid = 0, vrfid = 0;
+	struct parameter param;
+
+	if (argc == 1)
+	{
+		param.type = ARG_UINT;
+		param.min = 1;
+		param.max = 65535;
+		param.flag = ARG_MIN | ARG_MAX;
+
+		rc = getparameter(argc+1, argv-1, u, &param);
+		if (rc != 0)
+		{
+			return rc;
+		}
+
+		processid = param.value.v_int;
+		vrfid = 0;
+	
+		rc = cmdend(argc - 1, argv + 1, u);
+		if (rc != 0)
+		{
+			return rc;
+		}
+
+		rip_cmd_rip_process_enter(u, processid, vrfid, TRUE);
+	}
+	else
+	{
+		return subcmd(rip_cmd_vrf_table, NULL, argc, argv, u);
+	}
+				
+	return 0;
+}
+```
+
+#### rip_cmd_rip_process_enter
+
+```c
+int rip_cmd_rip_process_enter(struct user *u, uint32 processid, uint32 vrfid, uint8 enter_process_mode)
+{
+	int ret = 0;
+	struct rip_process_info_ *pprocess = NULL;
+
+	/*根据命令类型做不同处理*/
+	switch (TypeOfFunc(u))
+	{
+		case NORMAL_FUNC:
+			/*进入RIP配置模式*/
+			ret = rip_enter_rip_process_mode(u, processid ,vrfid, enter_process_mode);
+			if (RIP_SUCCESS != ret)
+			{
+				vty_output("RIP:rip_cmd_rip_process_enter,enter mode fail\n");
+				return RIP_FAIL;
+			}
+			
+			ret = rip_lookup_process_byprocessid(processid, &pprocess);
+			if (ret != RIP_SUCCESS)
+			{
+				/*第一次配置进程的时候生成进程*/
+				rip_process_init(processid, vrfid);		
+			}
+			else
+			{
+				/*若进程已经存在，需要进程模式配置命令时候，绑定到vrf下的进程可以不输入vrf名字
+				即可再次进入，但是没有绑定到vrf的进程，再次进入进程模式的时候，若输入vrf则提示错误，dangzhw20103.25*/
+				if (pprocess->vrf_id != vrfid)
+				{
+					if (vrfid != 0)
+					{
+						vty_output("RIP:process %d VRF specified does not match existing router\n", pprocess->process_id);
+						PrepareSwitch(u, FG_CONFIG);
+						modifyCmdFlag(u, FG_CFG_ST, FG_ANY);
+					}
+					else
+					{
+						SetVrfID(u, pprocess->vrf_id);/*设置真实的vrfid*/
+						break;
+					}
+					
+					return RIP_FAIL;
+				}
+			}
+			break;
+		case NOPREF_FUNC: // no router rip
+			ret = rip_lookup_process_byprocessid(processid, &pprocess);
+			if (ret != RIP_SUCCESS)
+			{
+				/*rip并没有启动,不作处理*/
+				return RIP_SUCCESS;
+			}
+
+			/*退出RIP配置模式*/
+			ret = rip_exit_rip_mode(u, pprocess);
+			if (RIP_SUCCESS != ret)
+			{
+				return RIP_FAIL;
+			}
+			break;
+		default:
+			break;
+	}
+
+	return RIP_SUCCESS;
+}
+```
+
+##### rip_exit_rip_mode
+
+```c
+int rip_exit_rip_mode( struct user *u ,struct rip_process_info_ *pprocess)
+{
+	int ret;
+	if(!pprocess)
+		return RIP_FAIL;
+	
+	/*停止RIP模块定时器*/
+	ret = rip_process_stop_timer(pprocess);
+	if( RIP_SUCCESS != ret )
+	{
+		return ret;
+	}
+
+	/*删除RIP模块定时器*/
+	ret = rip_process_delete_timer(pprocess);
+	if( RIP_SUCCESS != ret )
+	{
+		return ret;
+	}
+	
+	ret = sm_p(rip_semaphore, SM_WAIT, 0);
+	assert(ret == 0);
+	
+	/*删除进程下所有RIP路由表*/
+	rip_clear_process_table(pprocess);
+
+	/*删除RIP全局变量中保存的信息*/
+	rip_clear_process_info(pprocess);
+	ret = sm_v(rip_semaphore);
+	assert(ret == 0);
+	
+	PrepareSwitch(u, FG_CONFIG);
+	modifyCmdFlag(u, FG_CFG_ST, FG_ANY);
+
+	return RIP_SUCCESS;
+}
+```
+
+
+
+
+
+## ip rip send version 缺省
+
+```c
+/*ip rip send version命令*/
+// ip rip send version 按下tab后调用 rip_cmd_intf_send_ver
+struct cmds rip_cmds_intf_send_tab[] =
+{ 
+	{ 
+		"version",
+		MATCH_AMB,
+		cmdPref(PF_CMDNO, PF_CMDDEF, 0),
+		0,
+		rip_cmd_intf_send_ver,
+		NULL,
+		NULL, 
+		0,
+		0,
+		"version           -- Send version control",
+		"version           -- 发送版本控制", 
+		NULLCHAR,
+		NULLCHAR
+	},
+	
+	{ NULLCHAR }
+};
+
+/*===========================================================
+函数名:   rip_cmd_intf_send_ver
+函数功能: ip rip send version命令解析
+输入参数: argc/argv :命令参数
+         u: 命令用户
+输出参数: 无
+返回值:   处理成功,返回RIP_CMD_SUCCESS
+         处理失败,返回RIP_FAIL
+备注:
+=============================================================*/
+int rip_cmd_intf_send_ver( int argc, char **argv, struct user *u )
+{
+    int ret;
+    uint32 device_index;
+
+    switch(TypeOfFunc(u)) 
+    {
+    case NORMAL_FUNC:/*ip rip send version ?*/
+        return subcmd( rip_cmds_intf_send_ver_tab, NULL, argc, argv, u);
+        break;			
+    case NOPREF_FUNC:/*no ip rip send version*/
+    case DEFPREF_FUNC:/*default ip rip send version*/
+        ret = cmdend(argc - 1, argv + 1, u);
+        if( ret != 0 )
+        {
+            return ret;
+        }
+        device_index = u->struct_p[1];
+        /*check the device index add by fangqi  2006-10-11*/
+        if(rip_intf_array[device_index]==NULL)
+        {
+            return RIP_FAIL;
+        }
+        rip_intf_array[device_index]->send_version = RIP_SEND_VERSION_DEF;
+        break;
+    default:
+        break;
+    }
+
+    return RIP_SUCCESS;
+}
+
+/*ip rip send version <1-2>命令*/
+struct cmds rip_cmds_intf_send_ver_tab[] =
+{
+	{ "1234567890",
+        MATCH_DIG,
+        0,
+        0,
+		rip_cmd_intf_send_ver_val,
+        NULL,
+        NULL, 
+		0, 0,
+		"<1-2>             -- Send version",
+		"<1-2>             -- 发送版本",
+		NULLCHAR,
+        NULLCHAR
+	},
+	
+	{
+		"compatibility",
+		MATCH_AMB,
+		0,
+		0,
+		rip_cmd_intf_send_comp,
+		NULL,
+		NULL, 
+		0,
+		0, 
+		"compatibility     -- Send version 2 update broadcast",
+		"compatibility     -- 广播发送RIP版本2更新报文", 
+		NULLCHAR,
+		NULLCHAR
+	},
+	
+	{ "<cr>", MATCH_AMB, cmdPref(PF_CMDNO, PF_CMDDEF, PF_NOCMDNOR), 0,
+		NULL, NULL, NULL, 
+		0, 0,
+		"<cr>", 
+		"<cr>", 
+		NULLCHAR, NULLCHAR
+	},
+	{ NULLCHAR }
+};
+```
+
+```c
+/*===========================================================
+函数名:   rip_cmd_intf_send_ver_val
+函数功能: ip rip send version <1-2>命令解析
+输入参数: argc/argv :命令参数
+          u   : 命令用户
+输出参数: 无
+返回值:   处理成功,返回RIP_CMD_SUCCESS
+         处理失败,返回RIP_FAIL
+备注:
+=============================================================*/
+int rip_cmd_intf_send_ver_val( int argc, char **argv, struct user *u )
+{
+	int ret;
+	uint32 device_index;
+	struct parameter param;
+	
+	ret = cmdend(argc - 1, argv + 1, u);
+	if(ret != 0)
+	{
+		return ret;
+	}
+
+	param.type = ARG_UINT;
+	param.min = 1;
+	param.max = 2;
+	param.flag = ARG_MIN | ARG_MAX ;
+
+	ret = getparameter(argc + 1, argv - 1, u, &param);
+	if( ret != 0 )
+	{
+		return ret;
+	}
+	device_index = u->struct_p[1];
+	/*check the device index add by fangqi  2006-10-11*/
+       if(rip_intf_array[device_index]==NULL)
+	{
+        	return RIP_FAIL;
+	}
+	
+	if( 1 == param.value.v_int )
+	{
+		rip_intf_array[device_index]->send_version = RIP_SEND_VERSION_1;
+	}
+	else if( 2 == param.value.v_int )
+	{
+		rip_intf_array[device_index]->send_version = RIP_SEND_VERSION_2_MULTICAST;
+	}
+
+	return RIP_SUCCESS;	
+}
+```
+
+
+
+# rip_register_cmd
+
+```c
+// 注册RIP模块命令
+int rip_register_cmd(void) 
+    // 注册route rip命令下的子命令
+	registerncmd(rip_cmd_topcmds, (sizeof(rip_cmd_topcmds)/sizeof(struct topcmds)) - 1);
+	// 注册route rip命令
+	ret = register_subcmd_tab( "router", cmdPref(PF_CMDNO, 0, 0), IF_NULL, FG_CONFIG, rip_cmd_router_tab, 1 );				
+	// 注册接口配置模式下的RIP配置子命令
+	ret = register_subcmd_tab ( "ip", cmdPref(PF_CMDNO, PF_CMDDEF, 0), 
+#ifdef OS_VXWORKS
+				                IF_ROUTING & ~IF_VIRT, 
+#else
+				                IF_ANY & ~IF_VIRT, 
+#endif
+				                FG_CONFIG, rip_cmds_intf_tab, 1);
+	/*show ip 下相关RIP命令*/
+	ret = register_subcmd_tab("show ip", 0, IF_NULL, FG_ENABLE, rip_cmds_show_ip_tab, 1);
+
+	/*debug ip 下相关RIP命令*/
+	ret = register_subcmd_tab("debug ip", cmdPref(PF_CMDNO, 0, 0), IF_NULL, FG_ENABLE, rip_cmds_debug_ip_tab, 1);
+
+	/* RIP模块show running命令 */
+	ret = interface_set_showrunning_service(MODULE_TYPE_RIP, rip_show_running);
+```
+
+
+
+## **接口配置模式ip rip命令**
+
+```c
+// 注册接口配置模式下的RIP配置子命令
+ret = register_subcmd_tab ( "ip", cmdPref(PF_CMDNO, PF_CMDDEF, 0), 
+#ifdef OS_VXWORKS
+	IF_ROUTING & ~IF_VIRT, 
+#else
+	IF_ANY & ~IF_VIRT, 
+#endif
+	FG_CONFIG, rip_cmds_intf_tab, 1);
+
+/*接口配置模式ip rip命令*/
+struct cmds rip_cmds_intf_tab[] = 
+{
+	{ 
+		"rip",
+		MATCH_AMB,
+		cmdPref(PF_CMDNO, PF_CMDDEF, 0),
+		0,
+		rip_cmd_intf_rip,
+		NULL,
+		NULL,
+		0,
+		0,
+		"rip               -- Set RIP parameter on interface", 
+		"rip               -- 在端口上配置RIP参数", 
+		NULLCHAR,
+		NULLCHAR
+	},
+
+  {NULLCHAR}
+};
+
+/*===========================================================
+函数名:   rip_cmd_intf_rip
+函数功能: ip rip命令解析
+输入参数: argc/argv :命令参数
+          u   : 命令用户
+输出参数: 无
+返回值:   处理成功,返回RIP_CMD_SUCCESS
+          处理失败,返回RIP_FAIL
+备注:
+=============================================================*/
+int rip_cmd_intf_rip(int argc, char **argv, struct user *u)
+{
+	/*fengsb 针对bug 5970: 在76上的POS口配置rip相关命令，无法生效*/
+	/*Fengsb add 20070810 用于保存端口配置状态下对应的端口
+	diid，避免了在内部函数中多次调用GetMomentaryDevId( u, (DEVICE_ID *)&device_index );
+	优点是:1.可以提高效率
+	       2. 更重要的是采用了统一的封装函数rt_if_index,便于在76**机型
+	          上的移植工作,CPOS口转以太口，在线卡上显示的G口，而
+	          在主控上显示的是类似s1/1的串口*/
+	/*u->struct_p[1] = rt_if_index(u);*/
+	RIP_SET_DEVICE_INDEX(u);
+	return subcmd(rip_cmds_intf_rip_tab, NULL, argc, argv, u);
+}
+
+/*RIP接口配置命令*/
+struct cmds rip_cmds_intf_rip_tab[] = 
+{
+	{ 
+		"0123456789", 
+		MATCH_DIG, 
+		cmdPref(PF_CMDNO, 0, 0),
+		0,
+		rip_cmd_intf_rip_process,    
+		NULL,
+		NULL,
+		0,
+		0,
+		"<1-65535>              -- Special the process id",
+		"<1-65535>              -- 配置RIP 进程号",
+		NULLCHAR, 
+		NULLCHAR
+	},
+	{ 
+		"authentication",
+		MATCH_AMB,
+		cmdPref(PF_CMDNO, 0, 0),
+		0,
+		rip_cmd_intf_auth,
+		NULL,
+		NULL,
+		0,
+		0,
+		"authentication      -- Set authentication mode",
+		"authentication      -- 设置认证模式 ", 
+		NULLCHAR,
+		NULLCHAR
+	},
+
+	{
+		"md5-key", 
+		MATCH_AMB, 
+		cmdPref(PF_CMDNO, 0, 0), 
+		0,
+		rip_cmd_intf_md5, 
+		NULL, 
+		NULL, 
+		0, 
+		0,
+		"md5-key             -- Set md5 authentication key and key-id",
+		"md5-key             -- 设置MD5认证的密钥和认证ID ", 
+		NULLCHAR, 
+		NULLCHAR
+	},
+	{ 
+		"dynamic-key", 
+		MATCH_AMB,
+		cmdPref(PF_CMDNO, 0, 0), 
+		0,
+		rip_neigh_cmd_key, 
+		NULL, 
+		NULL, 
+		0, 
+		0,
+		"dynamic-key         -- Set  dynamic authentication key",
+		"dynamic-key         -- 设置动态认证密钥", 
+		NULLCHAR, 
+		NULLCHAR
+	},
+
+	{ 
+		"passive", 
+		MATCH_AMB, 
+		cmdPref(PF_CMDNO, PF_CMDDEF, 0), 
+		0,
+		rip_cmd_intf_passive, 
+		NULL, 
+		NULL, 
+		0, 
+		0,
+		"passive             -- Only receive Update on the interface",
+		"passive             -- 在端口上只接收Update报文 ", 
+		NULLCHAR, 
+		NULLCHAR
+	},
+
+	{ 
+		"deaf", 
+		MATCH_AMB, 
+		cmdPref(PF_CMDNO, PF_CMDDEF, 0), 
+		0,
+		rip_cmd_intf_deaf, 
+		NULL, 
+		NULL, 
+		0, 
+		0,
+		"deaf                -- not receive any rip packet on the interface",
+		"deaf                -- 端口上不接收rip报文", 
+		NULLCHAR, 
+		NULLCHAR
+	},
+
+	{ 
+		"v1demand", 
+		MATCH_AMB, 
+		cmdPref(PF_CMDNO, PF_CMDDEF, 0), 
+		0,
+		rip_cmd_intf_v1demand, 
+		NULL, 
+		NULL, 
+		0, 
+		0,
+		"v1demand            -- use v1 format when send request on the interface",
+		"v1demand            -- 在发送request时，只发送v1格式的报文", 
+		NULLCHAR, 
+		NULLCHAR
+	},
+
+	{ 
+		"v2demand", 
+		MATCH_AMB, 
+		cmdPref(PF_CMDNO, PF_CMDDEF, 0), 
+		0,
+		rip_cmd_intf_v2demand, 
+		NULL, 
+		NULL, 
+		0, 
+		0,
+		"v2demand            -- use v2 format when send request on the interface",
+		"v2demand            -- 在发送request时，只发送v2格式的报文", 
+		NULLCHAR, 
+		NULLCHAR
+	},
+		
+	
+	{ 
+		"password", 
+		MATCH_AMB, 
+		cmdPref(PF_CMDNO, 0, 0), 
+		0,
+		rip_cmd_intf_simple,
+		NULL, 
+		NULL, 
+		0, 
+		0,
+		"password            -- Set simple authentication password",
+		"password            -- 设置明文认证密钥 ", 
+		NULLCHAR,
+		NULLCHAR
+	},
+
+	{ 
+		"receive", 
+		MATCH_AMB, 
+		cmdPref(PF_CMDNO, PF_CMDDEF, 0), 
+		0,
+		rip_cmd_intf_recv, 
+		NULL, 
+		NULL, 
+		0, 
+		0,
+		"receive             -- Set receive version on the interface",
+		"receive             -- 设置端口接收版本", 
+		NULLCHAR, 
+		NULLCHAR
+	},
+
+	{
+		"send",
+		MATCH_AMB, 
+		cmdPref(PF_CMDNO, PF_CMDDEF, 0), 
+		0,
+		rip_cmd_intf_send, 
+		NULL, 
+		NULL, 
+		0, 
+		0,
+		"send                -- Set send version on the interface",
+		"send                -- 设置端口发送版本", 
+		NULLCHAR,
+		NULLCHAR
+	},
+	
+	{ 
+		"split-horizon",
+		MATCH_AMB,
+		cmdPref(PF_CMDNO, PF_CMDDEF, 0),
+		0,
+		rip_cmd_intf_split,
+		NULL,
+		NULL,
+		0,
+		0,
+		"split-horizon       -- Set split horizon on the interface",
+		"split-horizon       -- 设置端口水平分割",
+		NULLCHAR,
+		NULLCHAR
+	},
+	
+  	{NULLCHAR}
+};
+```
+
+```c
+int rip_cmd_intf_rip_process(int argc , char **argv , struct user *u)
+{	
+	return subcmd(rip_cmd_intf_rip_process_tab, NULL, argc, argv, u);
+}
+
+struct cmds rip_cmd_intf_rip_process_tab[] =
+{
+	{
+		 "enable",
+		 MATCH_AMB,
+		 cmdPref(PF_CMDNO, PF_CMDDEF, 0),
+		 0,
+		 rip_cmd_intf_rip_process_enable,   // ip rip <process-id> enable/disable
+		 NULL,
+		 NULL,
+		 0,
+		 0,
+		 "enable  -- enable/disable RIP process",
+		 "enable  -- 在端口启动/停止RIP进程",
+		 NULLCHAR,
+		 NULLCHAR
+	},
+
+	{NULLCHAR}
+};
+
+/*******************************************************************************
+ *
+ * FUNCTION	:	rip_cmd_intf_rip_process_enable
+ * NOTE			:	对端口上ip rip processid enable命令的处理，添加本地路由和进程端口
+ * AUTHOR		:	dangzhw
+ * DATE			:	2010.03.05 11:19:26
+ *
+*******************************************************************************/
+int rip_cmd_intf_rip_process_enable(int argc, char **argv, struct user *u)
+{
+	int ret = 0;
+	uint32 processid = 0;
+	uint32 device_index = 0;
+	struct rip_intf_ *pintf = NULL;
+	struct rip_process_info_ *pprocess = NULL;
+	struct rip_route_activate_msg_ msg;
+
+	/*检测命令行参数是否多余*/
+	ret = cmdend(argc - 1, argv + 1, u);
+	if (ret != 0) 
+	{
+		return ret;
+	}
+	
+    // ip rip <process-id> enable
+	ret = getuintrc(&processid, argc+2, argv-2, 1, 65535, u);
+	if (ARG_NOERR != ret)
+	{
+		return -1;
+	}
+
+	device_index = RIP_GET_DEVICE_INDEX(u);
+	pintf = rip_intf_array[device_index];
+	if (NULL == pintf)
+	{
+		return RIP_FAIL;
+	}
+	
+	switch ( TypeOfFunc(u) )
+	{
+	case NORMAL_FUNC: 
+		/* 一个端口只能绑定到一个进程
+		 * Commented by dangzhw in 2010.03.03 11:12:35 */
+		if (pintf->process_id != processid)
+		{
+			if (pintf->process_id != 0)/*已经属于别的进程*/
+			{
+				/*syslog(LOG_WARNING,"RIP:%s has been bind to process %d\n",pintf->intf_name , pintf->process_id);*/
+				vty_output("RIP:interface %s has been bind to process %d\n",pintf->intf_name, pintf->process_id);/*快速打印，直接返回*/
+				return RIP_FAIL;
+			}
+		}
+		else/*已经配置过该条命令*/
+		{
+			return RIP_SUCCESS;
+		}
+		
+		/* 将端口绑定到某个进程前需要先在全局下生成该进程
+		 * Commented by dangzhw in 2010.03.03 11:17:50 */
+		ret = rip_lookup_process_byprocessid(processid, &pprocess);
+		if (ret != RIP_SUCCESS)
+		{
+#if 0
+			vty_output("RIP:please creat process %d first\n", processid);
+			return RIP_FAIL;
+#else
+			/* 在上面的情况中，保存ip rip n enable的配置命令在当前显示风格中重启不能生效,
+			修订为若当前不存在该实例，则以该端口上的vrf创建实例
+			 * Commented by dangzhw in 2010.06.07 16:23:13 */
+			ret = rip_cmd_rip_process_enter(u, processid, pintf->vrf_id, FALSE);
+			if (ret != RIP_SUCCESS)
+			{
+				return ret;
+			}
+
+			ret = rip_lookup_process_byprocessid(processid, &pprocess);
+			if (ret != RIP_SUCCESS)
+			{
+				vty_output("RIP:process %d not exist\n", processid);
+				return RIP_FAIL;
+			}
+#endif
+		}
+
+		/* 在接口和进程的vrf不一致的给出提示，但仍能配置，等待接口配置的vrf改变的一致时生效
+		 * Commented by dangzhw in 2010.03.24 10:20:15 */
+		if (pprocess->vrf_id != pintf->vrf_id)
+		{
+			vty_output("Rip warning:interface %s has a different vrf wirh process %d(%d vs %d)",
+					pintf->intf_name, pprocess->process_id, pintf->vrf_id, pprocess->vrf_id);
+		}
+
+		/* 关联端口到对应的进程
+		 * Commented by dangzhw in 2010.03.03 11:23:37 */
+		pintf->process_id = processid;
+		pintf->pprocess = pprocess;
+
+		/* 将端口添加到rip进程的端口链表中
+		 * Commented by dangzhw in 2010.03.03 11:23:50 */
+		rip_relate_intf_to_process(device_index, pprocess, RIP_INTF_ADD_TO_PROCESS);
+
+		memset(&msg, 0, sizeof(struct rip_route_activate_msg_));
+		msg.u.intf.device_index = device_index;
+		msg.u.intf.warning = TRUE;
+		msg.type = RIP_ROUTE_INTF_PROCESS_ENABLE;
+
+		rip_process_route_activate(pprocess, &msg);
+		break;			
+	case NOPREF_FUNC:
+		if (pintf->process_id != processid)
+		{
+			rip_debug(RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d.\n", __FILE__,__LINE__);
+			return RIP_FAIL;
+		}
+
+		ret = rip_lookup_process_byprocessid(processid, &pprocess);
+		if (ret != RIP_SUCCESS)
+		{
+			vty_output("RIP:process %d not exist\n", processid);
+			return RIP_FAIL;
+		}
+		
+		memset(&msg, 0, sizeof(struct rip_route_activate_msg_));
+		msg.u.intf.device_index = device_index;
+		msg.type= RIP_ROUTE_INTF_PROCESS_DISABLE;
+
+		/* 将直连路由和汇总路由从进程的database中删除
+		 * Commented by dangzhw in 2010.03.05 11:17:11 */
+		rip_process_route_activate(pprocess, &msg);
+
+		/* 将端口从进程的端口链表中清除
+		 * Commented by dangzhw in 2010.03.05 11:17:35 */
+		rip_relate_intf_to_process(device_index, pprocess, RIP_INTF_DEL_FROM_PROCESS);
+
+		pintf->pprocess = NULL;
+		pintf->process_id = 0;
+		break;
+	default:
+		break;
+	}
+
+	return RIP_SUCCESS;
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # RIP配置命令
@@ -3979,7 +4852,15 @@ rip_route->gw_addr = src_addr;      # 发送路由更新的源ip地址
 
 ### 1. router rip
 
-用于配置RIP实例，no router rip 则关闭RIP实例。
+使用router rip *process-id*全局命令来配置RIP实例，no router rip *process-id*则关闭RIP实例。
+
+- router rip process-id [vrf vrf-name]
+- no router rip process-id [vrf vrf-name]
+
+| 参数       | 参数说明                                          |
+| ---------- | ------------------------------------------------- |
+| Process-id | 配置的实例ID，取值范围是1-65535，不可缺省         |
+| Vrf-name   | 指定RIP实例归属的VRF，未指定的话实例不属于任何vrf |
 
 > 必须先启动RIP实例，才能进入路由实例配置态，才能配置RIP实例的各种全局性参数，而配置与接口相关的参数则不受是否已经启动RIP实例的限制。 
 
@@ -4258,8 +5139,8 @@ router rip
 
 设置RIP路由的管理距离
 
-- **distance weight [ address/len [ access-list-name ]]**
-- **no distance weight [ address/len [ access-list-name ]]**
+- **distance <weight> [ address/len [ access-list-name ]]**
+- **no distance <weight> [ address/len [ access-list-name ]]**
 
 | 参数             | 参数说明                                                     |
 | ---------------- | ------------------------------------------------------------ |
@@ -4503,4 +5384,124 @@ interface g0
 
 
 
-- 
+
+
+- 向routing注册端口和路由事件
+
+  - 添加RIP端口，参数device_index
+
+    - 检测参数是否合法，端口是否已经添加过了，
+    - 若没添加，则申请内存rip_intf_array[device_index]，并对字段进行初始化
+      - device_index、send_version、recv_version、auth_type、split_flag、nbr_route_num
+      - 初始化链表，从邻居学习到的路由链表nbr_route_list、动态验证链表key_list、key_timeout_list
+    - 创建三个定时器，key_start_timer_id、key_lift_timer_id、auth_commit_timer_id
+    - 根据id，查找接口名，并初始化
+
+    
+
+  - 删除RIP端口，参数device_index
+
+    - 检测参数是否合法，端口是否存在
+    - 删除通过该端口从邻居学习到的路由，`rip_intf_array[device_index]->nbr_route_list`
+    - 由于端口绑定在RIP进程下，需要从process中intf_list根据device_id删除该端口
+    - 删除并释放内存，key_list和key_timeout_list中节点
+    - 暂停三个定时器，并删除
+    - 根据device_index从进程的peer_list中删除该端口信息
+
+    
+
+  - 端口UP，参数device_index
+
+    - 检测参数是否合法、端口是否存在、端口状态是否已经UP
+
+    - 获取并设置端口的封装类型
+
+    - 记录端口的状态为UP
+
+    - 如果端口的RIP进程没有开启，则直接Return
+
+    - 否则，若满足network覆盖、vrf一致等条件将会向进程**添加直连路由**
+
+      - 设置端口的状态为Active
+      - 设置端口能够发送组播报文
+      - 创建直连路由
+      - 该端口发送request报文，请求对端所以路由信息
+
+      
+
+  - 端口DOWN，参数device_index
+
+    - 检测参数是否合法，端口是否存在，端口状态是否DOWN
+
+    - 设置端口状态为DOWN
+
+    - 检查端口状态是否为ACTIVE
+
+      - 若是，则关闭端口的广播设置，删除直连路由、从端口学到的邻居路由、**创建重分布直连路由？？**
+
+      
+
+  - 给端口设置地址，类型：PPP协议地址、主IP地址和Unnumbered地址
+
+    > PPP 协议地址：PPP 连接过程中用于协商和管理连接的地址，主要在链路建立过程中使用。
+    >
+    > 主 IP 地址：接口的核心地址，用于标识接口和进行 IP 通信。
+    >
+    > Unnumbered 地址：通过共享其他接口的 IP 地址来标识链路，节省 IP 地址资源
+
+    - 检查参数是否合法，addr、mask、addr_type、vrf_id和aid是否和之前的一致
+
+    - 若一致，则跳出，不继续处理
+
+    - 否则，进行设置，若端口上进程未开启，则直接return，`process_id = 0`
+
+    - 检查是否需要添加直连路由
+
+      - 若端口状态为激活状态，则return
+
+      - 否则，若 `端口上没有ip地址、端口的vrf和进程的不一致、端口的proto不是up的，均不添加直连路由`
+
+        - 设置端口的状态为Active
+        - 设置端口能够发送组播报文
+        - 创建直连路由
+        - 该端口发送request报文，请求对端所以路由信息
+
+        
+
+  - 删除端口的地址，地址类型：PPP协议地址、主IP地址和Unnumbered地址
+
+    - 检查参数是否合法，端口是否存在，接收到的addr、mask、addr_type与所记录的端口地址信息不一致, 不作处理
+    - 查看端口上的进程是否开启，若开启了，且接口状态为UP、接口的进程id与主进程id一致
+      - 关闭端口的广播设置，删除直连路由、从端口学到的邻居路由、**创建重分布直连路由？？**
+    - 将端口的信息重置
+
+    
+
+  - 删除vrf后对rip进程的处理
+
+    - 遍历pprocess_list，找到指定vrf的进程，
+      - 关闭并删除RIP模块的定时器
+      - 删除pprocess进程下所有RIP路由表
+        - 销毁三个链表，filter_list、distance_list、offset_list
+        - 遍历intf_list，清除进程对端口的关联：禁止接口发送组播报文、删除直连路由
+        - 销毁rip_table
+        - 销毁redis_list
+      - RIP全局变量中保存的信息
+
+  
+
+  - 端口添加vrf
+    - 参数合法性检查
+    - 如果端口已经绑定了vrf，检查和传入的vrf是否一致，一致则直接return
+    - 若没绑定
+      - 设置接口的vrf-id
+      - 检查process-id是否为0，若为0，则return
+      - 否则，添加添加直连路由，并发送request
+
+  
+
+  - 端口删除vrf
+
+  
+
+  - 接收到routing路由发生变化时的处理函数
