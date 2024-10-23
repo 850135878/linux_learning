@@ -14,6 +14,6 @@ router rip 10
 
 # 将其设置到vlan中
 int vlan 10
-ip rip 10 enable
+ip rip 10 enableaa
 ```
 
