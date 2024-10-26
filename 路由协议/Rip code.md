@@ -3236,11 +3236,11 @@ void rip_add_item_to_pkt( uint32 device_index, uint32 dest_addr, uint16 dest_por
 >               rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
 >               return;
 >           }
->   
+>     
 >           offset = sizeof(struct rip_pkt_head_) + sizeof(struct rip_simple_head_);
 >           memset( (void *)(rip_send_buffer + offset), 0, (RIP_MAX_PACKET_SIZE - offset) );
 >           memcpy((rip_send_buffer + offset ), rip_route_item, sizeof(struct rip_route_item_) );
->   
+>     
 >           /*发送报文长度复位*/
 >           send_pkt_len = offset + sizeof(struct rip_route_item_);
 >           send_item_len = sizeof(struct rip_pkt_head_) + sizeof(struct rip_route_item_);
@@ -3248,7 +3248,7 @@ void rip_add_item_to_pkt( uint32 device_index, uint32 dest_addr, uint16 dest_por
 >       else
 >       {
 >           memcpy((rip_send_buffer + send_pkt_len ), rip_route_item, sizeof(struct rip_route_item_) );
->   
+>     
 >           /*累加发送报文长度*/
 >           send_pkt_len += sizeof(struct rip_route_item_);
 >           send_item_len += sizeof(struct rip_route_item_);
@@ -5384,6 +5384,7 @@ interface g0
 
 
 
+<<<<<<< Updated upstream
 
 
 - 向routing注册端口和路由事件
@@ -5505,3 +5506,34 @@ interface g0
   
 
   - 接收到routing路由发生变化时的处理函数
+=======
+# RIP命令code
+
+## show ip rip
+
+```c
+/*show ip 下的RIP命令*/
+struct cmds rip_cmds_show_ip_tab[] = 
+{
+	{ 
+		"rip", 
+		MATCH_AMB,
+		0,
+		0, 
+		rip_cmd_show_ip_rip,   #
+		NULL,
+		NULL, 
+		0,
+		0, 
+		"rip           -- Show RIP information",
+		"rip           -- 显示RIP协议信息", 
+		NULLCHAR,
+		NULLCHAR
+	},
+	
+	{NULLCHAR}
+};
+
+```
+
+>>>>>>> Stashed changes
