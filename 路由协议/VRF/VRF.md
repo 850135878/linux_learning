@@ -4,6 +4,14 @@
 
 
 
+> VLAN是用于二层隔离，给数据包打上标签
+>
+> VRF是三层隔离（路由隔离），通过打上RD标签，来查找路由表
+
+
+
+
+
 VRF又称VPN实例（VPN instance），是一种虚拟化技术。在物理设备上创建多个VPN实例，每个VPN实例拥有**独立的接口、路由表和路由协议进程**等。
 
 <img src="./VRF.assets/image-20241022142941657.png" alt="image-20241022142941657" style="zoom: 67%;" />
@@ -59,6 +67,27 @@ interface FastEthernet0/1
 ip vrf vrf1 route-target export 100:1
 ip vrf vrf1 route-target import 100:1
 ```
+
+
+
+```cmd
+do show running interface f0/1
+show ip int brief
+show ip protocols vrf cw
+
+R2(config)#int f0/1
+R2(config)#default int f0/1		# 清空该接口的配置
+R2(config)#int f0/1.1           # DOT1Q trunk
+R2(config-subif)#encapsulation dot1Q 10 # 在路由器上将物理接口分为多个子接口，并为每个子接口配置不同的 VLAN。
+R2(config-subif)#ip vrf forwarding cw
+R2(config-subif)#ip address 172.20.12.2 255.255.255.0
+
+R2(config)#router rip
+R2(config_rip)#address-family ipv4 vrf cw
+R2(config_rip_if)#network 192.168.1.0
+```
+
+
 
 
 

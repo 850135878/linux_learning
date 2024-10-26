@@ -1,0 +1,1135 @@
+﻿/******************************************************************************
+ *
+ *	Name:
+ *		var_ipRouteEntry
+ *
+ *	Input:
+ *		vp				- 
+ *		name			- 
+ *		length			- 
+ *		exact			- 
+ *		var_len			- 
+ *		write_method	- 
+ *
+ *	Return: 
+ *		
+ *	Description:
+ *		return ipv4 route entry
+ *
+ *	Creator:
+ *		Gao Feng
+ *
+ ******************************************************************************/
+#if 0
+u_char         *var_ipRouteEntry(struct variable *vp,
+								 oid * name, int *length, int exact, int *var_len, WriteMethod **write_method)
+{
+	/*
+	 * object identifier is of form:
+	 * 1.3.6.1.2.1.4.21.1.1.A.B.C.D,  where A.B.C.D is IP address.
+	 * IPADDR starts at offset 10.
+	 */
+	int i;
+	u_char         *cp;
+	oid            *op;
+	rt_head        *rth;
+	rt_entry       *now_rt = NULL;
+	rt_entry       *rt;
+	oid             lowest[22];
+	static oid      Current[22];
+	vrf_table_list_t *vrf_table;
+	radix_node     *head;
+    radix_node     *Xrn;
+    radix_node     *Xrn_temp;
+	radix_node     *Xstack[IPV4_MAX_PREFIXLEN + 1];
+    radix_node     **Xsp = Xstack;
+	uint32     rt_nh_num, nh_gateway, nh_index;
+	uint32    now_nh_gateway = 0, now_nh_index = 0;
+	IPV4_RT_NH *ipv4_rt_nh;
+		
+	vrf_table = vrf_table_enter(0, RT_RD_LOCK);
+	if(!vrf_table){
+		return NULL;
+	}
+
+	/* fill in object part of name for current
+	   (less sizeof instance part) */
+	memcpy(Current, vp->name, (int)(vp->namelen) * sizeof(oid));
+
+	head = vrf_table->radix_root;
+    Xrn = head;
+    Xrn_temp = head;
+
+    if(head){
+        while(Xrn){
+            if(Xrn->rnode_left){
+                if(Xrn->rnode_right){
+                    *Xsp++ = Xrn->rnode_right;
+                }
+                Xrn_temp = Xrn->rnode_left;
+            }else if(Xrn->rnode_right){
+                Xrn_temp = Xrn->rnode_right;
+            }else if(Xsp != Xstack){
+                Xrn_temp = *(--Xsp);
+            }else{
+                Xrn_temp = NULL;
+            }
+			
+            rth = Xrn->rnode_rth;
+            if(rth){	
+				int exact_find = 0;
+				
+                rt = rth->rth_active;
+				if(!rt || !BIT_TEST(rt->rt_state, RTS_ACTIVE) || rt->rt_proto == RTPROTO_LOCAL){
+					Xrn = Xrn_temp;
+					continue;
+				}
+
+				op = Current + 10;
+				cp = (u_char *) & rth->rth_dest;
+				*op++ = *cp++;
+				*op++ = *cp++;
+				*op++ = *cp++;
+				*op++ = *cp++;
+				cp = (u_char *)&rth->rth_mask;
+				*op++ = *cp++;
+				*op++ = *cp++;
+				*op++ = *cp++;
+				*op++ = *cp++;
+
+				rt_nh_num = rt->rt_nh_num;
+				for(i = 0; i < rt_nh_num; i++){
+					ipv4_rt_nh = &(rt->rt_nh[i]);
+					if(ipv4_rt_nh->nh_ptr){
+						RT_NH_RWLOCK_RD_LOCK(&(ipv4_nh_hash_table[ipv4_rt_nh->nh_ptr->hash_key].nh_list_rwlock));
+						nh_gateway = ipv4_rt_nh->nh_ptr->nh_gateway;
+						nh_index = ipv4_rt_nh->nh_ptr->nh_index;
+						RT_NH_RWLOCK_RD_UNLOCK(&(ipv4_nh_hash_table[ipv4_rt_nh->nh_ptr->hash_key].nh_list_rwlock));
+
+						op = Current + 18;
+						cp = (u_char*)&nh_gateway;
+						*op++ = *cp++;
+						*op++ = *cp++;
+						*op++ = *cp++;
+						*op++ = *cp++;
+						if(exact){
+							if(snmp_oid_compare(name, *length, Current, 22) == 0){
+								memcpy((char *)lowest, (char *)Current, 22 * sizeof(oid));
+								now_rt = rt;
+								now_nh_gateway = nh_gateway;
+								now_nh_index = nh_index;
+								exact_find++;
+								break;			/* no need to search further */
+							}
+						}else{
+							if((snmp_oid_compare(Current, 22, name, *length) > 0) &&
+							   (!now_rt || (snmp_oid_compare(Current, 22, lowest, 22) < 0))){
+							   /*Fengsb 2019-05-30ÏÂÒ»Ìønh_gatewayÐèÒª´ÓÐ¡µ½´óÅÅÁÐ£¬²ÅÄÜ±éÀúÍê±¸¡£*/
+								/*
+								 * if new one is greater than input and closer to input than
+								 * previous lowest, save this one as the "next" one.
+								 */
+								now_rt = rt;
+								now_nh_gateway = nh_gateway;
+								now_nh_index = nh_index;
+								memcpy((char *)lowest, (char *)Current, 22 * sizeof(oid));
+							}
+						}
+					}
+				}
+
+				if(exact_find){
+					break;
+				}
+            }
+
+            Xrn = Xrn_temp;
+        }
+    }
+
+	if(!now_rt){
+		vrf_table_leave(vrf_table, RT_RD_LOCK);
+		return NULL;
+	}
+
+	/*
+	 *  Return the name
+	 */
+	memcpy(name, lowest, 22 * sizeof(oid));
+	*length = 22;
+
+	*write_method = 0;
+	*var_len = sizeof(long_return);
+
+	switch (vp->magic) {
+	case IPROUTEDEST:
+		long_return = now_rt->rt_rth->rth_dest;
+		break;
+
+	case IPROUTEIFINDEX:
+		long_return = now_nh_index;
+		break;
+
+	case IPROUTEMETRIC1:
+		long_return = now_rt->distance;
+		break;
+		
+	case IPROUTEMETRIC2:
+		long_return = now_rt->metric;
+		break;
+		
+	case IPROUTEMETRIC3:
+		if(now_rt->rt_proto == RTPROTO_OSPF){
+			long_return = now_rt->metric2;
+		}else{ 
+			long_return  = -1;
+		}
+		break;
+		
+	case IPROUTEMETRIC4:
+		long_return = -1;
+		break;
+		
+	case IPROUTEMETRIC5:
+		long_return = -1;
+		break;
+
+	case IPROUTENEXTHOP:
+		long_return = now_nh_gateway;
+		break;
+
+	case IPROUTETYPE:
+		if(now_rt->rt_state & RTS_REMOTE){
+			long_return = 4;
+		}else{
+			uint32 iface_flags;
+			
+			rt_get_if_type(now_nh_index, &iface_flags);
+			if((iface_flags & INTERFACE_DEVICE_FLAGS_TYPE_MASK) == INTERFACE_DEVICE_FLAGS_TYPE_NULL){
+				long_return = 2;
+			}else{
+				long_return = 3;
+			}
+		}
+		break;
+
+	case IPROUTEPROTO:
+		switch(now_rt->rt_proto){
+		case RTPROTO_DIRECT:
+			long_return = 2;
+			break;
+		case RTPROTO_STATIC:
+			long_return = 3;
+			break;
+		case RTPROTO_RIP:
+			long_return = 8;
+			break;
+		case RTPROTO_ISIS_L1:
+		case RTPROTO_ISIS_L2:
+			long_return = 9;
+			break;
+		case RTPROTO_OSPF:
+			long_return = 13;
+			break;
+		case RTPROTO_BGP:
+			long_return = 14;
+			break;
+		case RTPROTO_BIGP:
+			long_return = 16;
+			break;
+		default:
+			long_return = 1;
+			break;
+		}
+		break;
+
+	case IPROUTEAGE:
+		if(now_rt->rt_facus){
+			long_return = time_sec - now_rt->rt_facus->rt_time;
+		}else{
+			long_return = time_sec;
+		}
+		break;
+
+	case IPROUTEMASK:
+		long_return = now_rt->rt_rth->rth_mask;
+		break;
+
+	case IPROUTEINFO:
+		switch(now_rt->rt_proto){
+		case RTPROTO_RIP:
+			*var_len = sizeof(rip_variables_oid_mib);
+			vrf_table_leave(vrf_table, RT_RD_LOCK);
+			return (u_char *) rip_variables_oid_mib;
+		case RTPROTO_OSPF:
+			*var_len = sizeof(ospf_variables_oid_mib);
+			vrf_table_leave(vrf_table, RT_RD_LOCK);
+			return (u_char *) ospf_variables_oid_mib;
+		case RTPROTO_BGP:
+			*var_len = sizeof(bgp_oid_mib);
+			vrf_table_leave(vrf_table, RT_RD_LOCK);
+			return (u_char *) bgp_oid_mib;
+		case RTPROTO_ISIS_L1:
+		case RTPROTO_ISIS_L2:
+			*var_len = sizeof(isis_oid_mib);
+			vrf_table_leave(vrf_table, RT_RD_LOCK);
+			return (u_char *) isis_oid_mib;
+		default:
+			*var_len = nullOidLen;
+			vrf_table_leave(vrf_table, RT_RD_LOCK);
+			return (u_char *) nullOid;
+		}
+	default:
+		ERROR_MSG("");
+		vrf_table_leave(vrf_table, RT_RD_LOCK);
+		return NULL;
+	}
+
+	vrf_table_leave(vrf_table, RT_RD_LOCK);
+	
+	return (u_char *)&long_return;
+}
+
+u_char         *var_ipCidrRouteEntry(struct variable *vp,
+								 oid * name,
+								 int *length, int exact, int *var_len, WriteMethod ** write_method)
+{
+	/*
+	 * object identifier is of form:
+	 * 1.3.6.1.2.1.4.24.4.1.1.A.B.C.D.a.b.c.d.H.I.J.K,  where A.B.C.D is IP address, a.b.c.d is MASK, H.I.J.K is next hop
+	 * IPADDR starts at offset 11.
+	 */
+	int i;
+	u_char         *cp;
+	oid            *op;
+	rt_head        *rth;
+	rt_entry       *now_rt = (rt_entry *) 0;
+	rt_entry       *rt;
+	oid             lowest[23];
+	static oid      Current[23];
+	vrf_table_list_t *vrf_table;
+	radix_node     *head;
+    radix_node     *Xrn;
+    radix_node     *Xrn_temp;
+	radix_node     *Xstack[IPV4_MAX_PREFIXLEN + 1];
+    radix_node     **Xsp = Xstack;
+	uint32     rt_nh_num, nh_gateway, nh_index, nh_as;
+	uint32    now_nh_gateway = 0, now_nh_index = 0, now_nh_as = 0;
+	IPV4_RT_NH *ipv4_rt_nh;
+		
+	vrf_table = vrf_table_enter(0, RT_RD_LOCK);
+	if(!vrf_table){
+		return NULL;
+	}
+	
+	/* fill in object part of name for current
+	   (less sizeof instance part) */
+	memcpy(Current, vp->name, (int)(vp->namelen) * sizeof(oid));
+
+	head = vrf_table->radix_root;
+    Xrn = head;
+    Xrn_temp = head;
+
+    if(head){
+        while(Xrn){
+            if(Xrn->rnode_left){
+                if(Xrn->rnode_right){
+                    *Xsp++ = Xrn->rnode_right;
+                }
+                Xrn_temp = Xrn->rnode_left;
+            }else if(Xrn->rnode_right){
+                Xrn_temp = Xrn->rnode_right;
+            }else if(Xsp != Xstack){
+                Xrn_temp = *(--Xsp);
+            }else{
+                Xrn_temp = NULL;
+            }
+			
+            rth = Xrn->rnode_rth;
+            if(rth){	
+				int exact_find = 0;
+				
+                rt = rth->rth_active;
+				if(!rt || !BIT_TEST(rt->rt_state, RTS_ACTIVE) || rt->rt_proto == RTPROTO_LOCAL){
+					Xrn = Xrn_temp;
+					continue;
+				}
+
+				op = Current + 11;
+				cp = (u_char *) & rth->rth_dest;
+				*op++ = *cp++;
+				*op++ = *cp++;
+				*op++ = *cp++;
+				*op++ = *cp++;
+				cp = (u_char *)&rth->rth_mask;
+				*op++ = *cp++;
+				*op++ = *cp++;
+				*op++ = *cp++;
+				*op++ = *cp++;
+
+				rt_nh_num = rt->rt_nh_num;
+				for(i = 0; i < rt_nh_num; i++){
+					ipv4_rt_nh = &(rt->rt_nh[i]);
+					if(ipv4_rt_nh->nh_ptr){
+						RT_NH_RWLOCK_RD_LOCK(&(ipv4_nh_hash_table[ipv4_rt_nh->nh_ptr->hash_key].nh_list_rwlock));
+						nh_gateway = ipv4_rt_nh->nh_ptr->nh_gateway;
+						nh_index = ipv4_rt_nh->nh_ptr->nh_index;
+						RT_NH_RWLOCK_RD_UNLOCK(&(ipv4_nh_hash_table[ipv4_rt_nh->nh_ptr->hash_key].nh_list_rwlock));
+						nh_as = ipv4_rt_nh->nh_as;
+							
+						op = Current + 19;
+						cp = (u_char*)&nh_gateway;
+						*op++ = *cp++;
+						*op++ = *cp++;
+						*op++ = *cp++;
+						*op++ = *cp++;
+						if(exact){
+							if(snmp_oid_compare(name, *length, Current, 23) == 0){
+								memcpy((char *)lowest, (char *)Current, 23 * sizeof(oid));
+								now_rt = rt;
+								now_nh_gateway = nh_gateway;
+								now_nh_index = nh_index;
+								now_nh_as = nh_as;
+								exact_find++;
+								break;			/* no need to search further */
+							}
+						}else{
+							if((snmp_oid_compare(Current, 23, name, *length) > 0) &&
+							   (!now_rt || (snmp_oid_compare(Current, 23, lowest, 23) < 0))){
+								/*
+								 * if new one is greater than input and closer to input than
+								 * previous lowest, save this one as the "next" one.
+								 */
+								now_rt = rt;
+								now_nh_gateway = nh_gateway;
+								now_nh_index = nh_index;
+								now_nh_as = nh_as;
+								memcpy((char *)lowest, (char *)Current, 23 * sizeof(oid));
+							}
+						}
+					}
+				}
+
+				if(exact_find){
+					break;
+				}
+            }
+
+            Xrn = Xrn_temp;
+        }
+    }
+
+	if(!now_rt){
+		vrf_table_leave(vrf_table, RT_RD_LOCK);
+		return NULL;
+	}
+
+	/*
+	 *  Return the name
+	 */
+	memcpy(name, lowest, 23 * sizeof(oid));
+	*length = 23;
+
+	*write_method = 0;
+	*var_len = sizeof long_return;
+
+
+	switch (vp->magic) {
+	case IPCIDRROUTEDEST:
+		long_return = now_rt->rt_rth->rth_dest;
+		break;
+
+	case IPCIDRROUTEIFINDEX:
+		long_return = now_nh_index;
+		break;
+		
+	case IPCIDRROUTETOS:
+		long_return = 0;
+		break;
+		
+	case IPCIDRROUTEMETRIC1:
+		long_return = now_rt->distance;
+		break;
+		
+	case IPCIDRROUTEMETRIC2:
+		long_return = now_rt->metric;
+		break;
+		
+	case IPCIDRROUTEMETRIC3:
+		if(now_rt->rt_proto == RTPROTO_OSPF){
+			long_return = now_rt->metric2;
+		}else{		
+			long_return = -1;
+		}
+		break;
+		
+	case IPCIDRROUTEMETRIC4:
+		long_return = -1;
+		break;
+		
+	case IPCIDRROUTEMETRIC5:
+		long_return = -1;
+		break;
+		
+	case IPCIDRROUTENEXTHOPAS:
+		long_return = now_nh_as;
+		break;
+		
+	case IPCIDRROUTENEXTHOP:
+		long_return = now_nh_gateway;
+		break;
+
+	case IPCIDRROUTETYPE:
+		if(now_rt->rt_state & RTS_REMOTE){
+			long_return = 4;
+		}else{
+			uint32 iface_flags;
+			
+			rt_get_if_type(now_nh_index, &iface_flags);
+			if((iface_flags & INTERFACE_DEVICE_FLAGS_TYPE_MASK) == INTERFACE_DEVICE_FLAGS_TYPE_NULL){
+				long_return = 2;
+			}else{
+				long_return = 3;
+			}
+		}
+		break;
+
+	case IPCIDRROUTEPROTO:
+		switch (now_rt->rt_proto){
+		case RTPROTO_DIRECT:
+			long_return = 2;
+			break;
+		case RTPROTO_STATIC:
+			long_return = 3;
+			break;
+		case RTPROTO_RIP:
+			long_return = 8;
+			break;
+		case RTPROTO_ISIS_L1:
+		case RTPROTO_ISIS_L2:
+			long_return = 9;
+			break;
+		case RTPROTO_OSPF:
+			long_return = 13;
+			break;
+		case RTPROTO_BGP:
+			long_return = 14;
+			break;
+		case RTPROTO_BIGP:
+			long_return = 16;
+			break;
+		default:
+			long_return = 1;
+			break;
+		}
+		break;
+
+	case IPCIDRROUTEAGE:
+		if(now_rt->rt_facus){
+			long_return = time_sec - now_rt->rt_facus->rt_time;
+		}else{
+			long_return = time_sec;
+		}
+		break;
+
+	case IPCIDRROUTEMASK:
+		long_return = now_rt->rt_rth->rth_mask;
+		break;
+		
+	case IPCIDRROUTESTATUS:
+		long_return = 1;/*active*/
+		break;
+		
+	case IPCIDRROUTEINFO:
+		switch (now_rt->rt_proto){
+		case RTPROTO_RIP:
+			*var_len = sizeof(rip_variables_oid_mib);
+			vrf_table_leave(vrf_table,RT_RD_LOCK);
+			return (u_char *) rip_variables_oid_mib;
+			
+		case RTPROTO_OSPF:
+			*var_len = sizeof(ospf_variables_oid_mib);
+			vrf_table_leave(vrf_table,RT_RD_LOCK);
+			return (u_char *) ospf_variables_oid_mib;
+			
+		case RTPROTO_BGP:
+			*var_len = sizeof(bgp_oid_mib);
+			vrf_table_leave(vrf_table,RT_RD_LOCK);
+			return (u_char *) bgp_oid_mib;
+			
+		case RTPROTO_ISIS_L1:
+		case RTPROTO_ISIS_L2:
+			*var_len = sizeof(isis_oid_mib);
+			vrf_table_leave(vrf_table,RT_RD_LOCK);
+			return (u_char *) isis_oid_mib;
+			
+		default:
+			*var_len = nullOidLen;
+			vrf_table_leave(vrf_table,RT_RD_LOCK);
+			return (u_char *) nullOid;
+		}
+		
+	default:
+		ERROR_MSG("");
+		vrf_table_leave(vrf_table, RT_RD_LOCK);
+		return NULL;
+	}
+
+	vrf_table_leave(vrf_table, RT_RD_LOCK);
+	return (u_char *) & long_return;
+}
+
+#else
+
+/*******************************************************************************
+ *
+ * FUNCTION		:	var_ipRouteEntry
+ *
+ * PARAMS		:	
+ *                 vp	  IN      - pointer to variable entry that points here
+ *                 name    IN/OUT  - IN/name requested, OUT/name found
+ *                 length  IN/OUT  - length of IN/OUT oid's 
+ *                 exact   IN      - TRUE if an exact match was requested
+ *                 var_len OUT     - length of variable or 0 if function returned
+ *                 write_method    -
+ *
+ *                  PARAMS IN:
+ *                  vp	    - °üº¬ÁËµ±Ç°SNMP serverÖ¸¶¨µÄ½Úµã£¬ÐèÒª·µ»ØÏÂÒ»¸ö½ÚµãµÄÄÚÈÝ
+ *                          vp->nameÊÇ1.3.6.1.2.1.4.21.1.1£¬ÒâÎ¶×ÅÎÒÃÇÐèÒª·µ»ØµÄÊÇ
+ *                                  1.3.6.1.2.1.4.21.1.1½Úµã¶ÔÓ¦±íÏîµÄÄÚÈÝ
+ *                                  Õâ¸öÎªµ±Ç°MIB browser¸ù¾ÝRFC¶¨ÒåµÄÒ¶×Ó½ÚµãOID *
+ *                               
+ *                          vp->magicÊÇÔÚ×¢²áµÄÊ±ºòÌîÈëµÄÖµ£¬±ÈÈçIP×¢²ámibÊ±
+ *                              struct variable4 ip_variables[]µÄ·ÖÁ¿:
+ *                              {IPROUTEDEST, ASN_IPADDRESS, RONLY, var_ipRouteEntry, 3, {21, 1, 1}},
+ *                              magic¾ÍÊÇIPROUTEDEST£¬»á×öÎªÈë²Î»Ø´«¸ø±¾º¯Êý¡£
+ *                          vp->namelen´«ÈëµÄvp->nameµÄ³¤¶È£¬¡£
+                    
+ *					exact		- ¾«È·Æ¥Åä£¬ÔÚMIB browserÖ¸¶¨OID²¢·ÃÎÊÊ±£¬»òÕßÑ¡ÔñÒ»¸öÈ·¶¨µÄÌõÄ¿½øÐÐget
+ *                                ¸ÃÖµÎª1; ·ñÔòÎª0 
+ *              
+ *                  PARAMS IN/OUT:
+ *                  name    -   oidË÷Òý£¬°üÀ¨´ý±éÀúµÄ±íÏî¼ÇÂ¼Ë÷Òý£»
+ *                              Ê×´Î½øÈëÎª¶ÔÓ¦µÄ±íÏî½Úµã»òÕßÒ¶×Ó½ÚµãOID: 1.3.6.1.2.1.4.21.1.1
+ *                              ÔÚºóÐø±éÀú¹ý³ÌÖÐ£¬»¹»Ø´«ÈëÒ¶×Ó½Úµã"OID+Ë÷Òý"£¬±ÈÈç
+ *                              1.3.6.1.2.1.4.21.1.1.A.B.C.D.M1.M2.M3.M4.a.b.c.d
+ *                              ±íÊ¾:  OID.Ç°×º.ÑÚÂë.ÏÂÒ»Ìø    
+ *                  length  -   ×öÎªÈë²ÎÊ±Ç£¬ÎªnameµÄ³¤¶È£¬×öÎª³ö²ÎÊ±£¬Îª»ØÐ´¸ønameµÄ"oid+Ë÷Òý"³¤¶ÈÖµ
+ *                              Ê×´Î½øÈëÎª¶ÔÓ¦µÄ±íÏî½Úµã»òÕßÒ¶×Ó½ÚµãOID³¤¶È
+ *                              ºóÐøµÄÎª"OID+Ë÷Òý"µÄ³¤¶È
+ *                  
+ *                  PARAMS  OUT:
+ *                  var_len - ·µ»ØÖµµÄ³¤¶È(Bytes)
+ *
+ * RETURN		:	·µ»Ø¸øSNMP agentµÄÖµ£¬¸ù¾ÝMIB browserÒªÇó½øÐÐ·µ»Ø¡£
+ *                  1. NULL, ±íÊ¾±¾±íÏî±éÀúÍê±Ï£¬»òÕßÃ»ÕÒµ½¶ÔÓ¦Ë÷ÒýµÄ½Úµã£» SNMP agent»áÔÙ´Î»Øµ÷±¾º¯Êý£¬Í¨¹ý
+ *                            vp->name´«ÈëÏÂÒ»¸ö½ÚµãÖµ¡£
+ *                  2. long_returnµÈÆäËüÖµ, »Ø´«¸øsnmp agentÒÔºó£¬»á·´À¡µ½mib browser.
+ *                      ±ÈÈçÎÒÃÇ·ÃÎÊÖ±½Ó½Úµã1.3.6.1.2.1.4.21.1.11£¬»òÕßÍ¨¹ý·ÃÎÊipRouteTable±í£¬·ÃÎÊÒ¶×ÓipRouteMask
+ *                          1: ipRouteMask.89.1.1.0.255.255.255.0.0.0.0.0 (ipaddress) 255.255.255.0
+ *                          ×îºóÒ»ÁÐµÄ255.255.255.0¾ÍÊÇÕâ¸ölong_return£» Ç°ÃæµÄipRouteMask.89.1.1.0.255.255.255.0.0.0.0.0
+ *                          ÊÇÐ´ÈënameµÄ"OID+Ë÷Òý"
+ *              
+ *
+ * NOTE			:	ÏìÓ¦SNMP SERVER£»±¾À´°´ÕÕdest£¬maskµÈ¿ÉÒÔ·Ö±ð½¨Á¢OIDÒÔ¼°Ò¶×ÓË÷Òý¡£µ«ÊÇ¿¼ÂÇµ½Â·ÓÉÐèÒª
+ *                  Ç°×º¡¢ÑÚÂë¡¢ÏÂÒ»Ìø²ÅÄÜÎ¨Ò»È·¶¨Ò»¸ö·ÃÎÊ¼ÇÂ¼£¬Ìá½»¸øSNMP SERVER,²¢»Ø´«»ØÀ´£¬ËùÒÔ¶ÔOIDÒ¶×Ó
+ *                  ½ÚµãÀ©Õ¹µ½ÁË22Î»:1.3.6.1.2.1.4.21.1.1.A.B.C.D.M1.M2.M3.M4.NH1.NH2.HN3.NH4
+ *                  ·ÃÎÊÒ»¸öMIB±íµ¥»òÕßÒ¶×Ó½ÚµãÊ±,µ»ØNULL,±íÊ¾·ÃÎÊÍê±Ï£¬ËäÈ»¸ù¾Ý·µ»ØÖµNULL,SNMP agentÖªµÀ¸Ã½ÚµãÄÚÈÝÒÑ¾­·ÃÎÊÍê±Ï¡£
+ *                  µ«ÊÇ£¬ mib browser(server¶Ë)²¢²»Çå³þ²¢²»Çå³þ£¬»á¼ÌÐø´«ÈëÏÂÒ»¸ömib½ÚµãµÄoid¡£
+ *                     1.3.6.1.2.1.4.21.1.1ÒÔºó,»á¼ÌÐø´«Èë1.3.6.1.2.1.4.21.1.2ÒÔ¼°¶ÔÓ¦ºóÕßµÄmagic
+ *                     Èç¹û1.3.6.1.2.1.4.21.1.2ÊôÓÚ±¾Ä£¿éµÄÄÚÈÝ,ÐèÒª¼ÌÐø½øÐÐÏìÓ¦.Ö±µ½´«ÈëµÄOIDºÍ±¾Ä£¿éÎÞ¹Ø,
+ *                     Èç¹ûÊÇ·ÃÎÊµÄÒ¶×Ó½Úµã£¬Ôò¾¡¹ÜºóÐø±¾Ä£¿éºóÑ§¸ø³öÁËÕýÈ·µÄÏìÓ¦£¬µ«ÊÇÔÚmib browserÉÏ£¬Ö»ÏÔÊ¾ºÍ³õÊ¼Ö¸¶¨Ò¶×Ó½Úµã
+ *                     Ïà¹ØµÄÐÅÏ¢¡£ÆäÓàÒ¶×Ó½ÚµãµÄ£¬²»»áÔÚmib browserÉÏÏÔÊ¾´¦Àí¡£
+ *
+ *                  ¸Ð¾õÕâ¸ö´¦Àí·½Ê½£¬·Ç³£µÍÐ§¡£
+ *                  ±¾º¯ÊýÈç¹ûÔÚ±éÀú¹ý³ÌÖÐÉ¾³ýÁËÄ³¸ö½Úµã£¬»òÕßÔÚÒÑ¾­±éÀú²¿·ÖÐÂÔöÁËÒ»¸öÂ·ÓÉ½Úµã»á³öÏÖÎÊÌâ:
+ *                  Ç°Õß»áµ¼ÖÂÎÞ·¨¼ÌÐø±éÀúÏÂÈ¥£¬ºóÕß»áµ¼ÖÂÐÂÔö½Úµã²»»áË¢ÐÂ·µ»Ø¸øSNMP agent¡£
+ *                  ¿ÉÒÔ²ÎÕÕµÄmib´¦Àíº¯Êýheader_ospf_range
+ *
+ * AUTHOR		:	Fengsb
+ *
+ * DATE			:	2019.05.30 18:17:40
+ *
+*******************************************************************************/
+
+u_char *var_ipRouteEntry(struct variable *vp, oid * name, int *length, int exact, 
+								int *var_len, WriteMethod **write_method)
+{
+	/*
+	 * object identifier is of form:
+	 * 1.3.6.1.2.1.4.21.1.1.A.B.C.D,  where A.B.C.D is IP address.
+	 * IPADDR starts at offset 10.
+	 *1.3.6.1.2.1.4.21.1.1.A.B.C.D.M1.M2.M3.M4.a.b.c.d
+	 */
+	int            i, match = 0;
+	u_char         *cp;
+	oid            *op;
+	rt_head        *rth;
+	rt_entry       *now_rt = NULL;
+	rt_entry       *rt;
+	vrf_table_list_t *vrf_table;
+    radix_node     *Xrn;
+    radix_node     *Xrn_temp;
+	radix_node     *Xstack[IPV4_MAX_PREFIXLEN + 1];
+    radix_node     **Xsp = Xstack;
+	uint32         ip_addr, ip_mask, ip_nh_gateway;
+	uint32         rt_nh_num, nh_gateway, nh_index;
+	uint32         now_nh_gateway = 0, now_nh_index = 0;
+	IPV4_RT_NH     *ipv4_rt_nh;
+      
+	if(*length <= 10){
+        /*ÐÂµÄOID½Úµã£¬´ËÊ±Ã»´ø¸Ã½ÚµãÏÂµÄ¼ÇÂ¼Ë÷ÒýÖµ*/
+		ip_addr       = 0;
+		ip_mask       = 0;
+		ip_nh_gateway = 0;
+	}else if(*length == 22){
+		int  ok = TRUE;
+		
+		op = name + 10;
+		
+		cp = (u_char *)&ip_addr;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		cp = (u_char *)&ip_mask;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		cp = (u_char *)&ip_nh_gateway;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		*cp++ = *op++;
+                
+		if(exact && (ip_mask == 0x01010101) && (ip_nh_gateway == 0)) /* use the magic number 0x01010101 to present longest prefix match */
+		{
+			ip_mask = 0;
+			match = 1;
+		}
+		
+		/*¼ì²éµØÖ·ÑÚÂëÊÇ·ñÕýÈ·*/
+		if((!check_mask(ip_mask)) && (ip_mask != 0)){
+			return NULL;
+		}
+			
+		rt_add_check(ip_addr, ip_mask, ok);
+		if(!ok){
+			return NULL;
+		}
+	}/*else if(*length == 14){
+		op = name + 10;
+		
+		cp = (u_char *)&ip_addr;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		ip_mask       = 0;
+		ip_nh_gateway = 0;
+	}else if(*length == 18){
+		op = name + 10;
+		
+		cp = (u_char *)&ip_addr;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		cp = (u_char *)&ip_mask;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		*cp++ = *op++;
+		ip_nh_gateway = 0;
+	}*/else{
+		return NULL;
+	}
+
+	/*Print("%s %s %u %u %u %u %u\n", 
+		ip_ntoa(ip_addr), ip_ntoa(ip_mask), *length, vp->magic, vp->namelen, 
+		vp->name[9], name[9]);*/
+	
+	vrf_table = vrf_table_enter(0, RT_RD_LOCK);
+	if(!vrf_table){
+		return NULL;
+	}
+
+	if(exact){
+        /*ÒªÇó¾«È·Æ¥Åä*/
+		if(match)
+		{
+			rt = rt_entry_match(vrf_table, ip_addr);
+		}
+		else
+		{
+			rth = rt_table_locate(0, ip_addr, ip_mask);
+			rt = rth? rth->rth_active: NULL;
+		}		
+		
+		if(rt && BIT_TEST(rt->rt_state, RTS_ACTIVE) && rt->rt_proto != RTPROTO_LOCAL){
+			rt_nh_num = rt->rt_nh_num;
+			for(i = 0; i < rt_nh_num; i++){
+				ipv4_rt_nh = &(rt->rt_nh[i]);
+				if(ipv4_rt_nh->nh_ptr){
+					RT_NH_RWLOCK_RD_LOCK(&(ipv4_nh_hash_table[ipv4_rt_nh->nh_ptr->hash_key].nh_list_rwlock));
+					nh_gateway = ipv4_rt_nh->nh_ptr->nh_gateway;
+					nh_index   = ipv4_rt_nh->nh_ptr->nh_index;
+					RT_NH_RWLOCK_RD_UNLOCK(&(ipv4_nh_hash_table[ipv4_rt_nh->nh_ptr->hash_key].nh_list_rwlock));
+
+					if(match || (nh_gateway == ip_nh_gateway)){
+						now_rt         = rt;
+						now_nh_gateway = nh_gateway;
+						now_nh_index   = nh_index;                        
+						break;
+					}
+				}
+			}
+		}
+	}else{
+        /*if(*length <= 10 || vp->name[9] != name[9]) Ô­ÓÐ´úÂë±»ÆÁ±Î*/
+        /*vp->name[9] != name[9] : ±íÊ¾vp->magic ±ä»¯£¬Ò»°ã·¢ÉúÔÚwalkÊ±£¬Ó¦¸ÃÊÇÌøµ½ÏÂÒ»¸ömib½ÚµãÁË,Èç¹ûÏÂÒ»¸ömib½ÚµãÊôÓÚ
+        µ±Ç°Ä£¿éÐèÒªÎ¬»¤µÄÄÚÈÝ,ÐèÒª½øÐÐÏìÓ¦. ´Óroot½Úµã¿ªÊ¼£¬ÖØÐÂ²éÕÒµÚÒ»¸ö´æÔÚactiveÂ·ÓÉÐÅÏ¢µÄ½Úµã¡£*/
+		if((*length <= 10) || (snmp_oid_compare(vp->name, vp->namelen, name, *length) > 0) )
+        { 
+			Xrn = vrf_table->radix_root;	
+			while(Xrn){
+				if(Xrn->rnode_left){
+					if(Xrn->rnode_right){
+						*Xsp++ = Xrn->rnode_right;
+					}
+					Xrn_temp = Xrn->rnode_left;
+				}else if(Xrn->rnode_right){
+					Xrn_temp = Xrn->rnode_right;
+				}else if(Xsp != Xstack){
+					Xrn_temp = *(--Xsp);
+				}else{
+					Xrn_temp = NULL;                    
+				}
+				
+				rth = Xrn->rnode_rth;
+				if(rth){			
+					rt = rth->rth_active;
+					if(rt && BIT_TEST(rt->rt_state, RTS_ACTIVE) && rt->rt_proto != RTPROTO_LOCAL){
+						rt_nh_num = rt->rt_nh_num;
+						for(i = 0; i < rt_nh_num; i++){
+							ipv4_rt_nh = &(rt->rt_nh[i]);
+							if(ipv4_rt_nh->nh_ptr){
+								RT_NH_RWLOCK_RD_LOCK(&(ipv4_nh_hash_table[ipv4_rt_nh->nh_ptr->hash_key].nh_list_rwlock));
+								nh_gateway = ipv4_rt_nh->nh_ptr->nh_gateway;
+								nh_index   = ipv4_rt_nh->nh_ptr->nh_index;
+								RT_NH_RWLOCK_RD_UNLOCK(&(ipv4_nh_hash_table[ipv4_rt_nh->nh_ptr->hash_key].nh_list_rwlock));
+							
+								now_rt         = rt;
+								now_nh_gateway = nh_gateway;
+								now_nh_index   = nh_index;
+								break;
+							}
+						}
+
+						if(now_rt){                            
+							break;
+						}
+					}				
+				}
+
+				Xrn = Xrn_temp;
+			}
+		}else{
+			int    find_same = 0;
+			uint32 bitlen    = mask_to_prefix(ip_mask);
+
+			Xrn = vrf_table->radix_root;
+			if(Xrn){
+				cp = (u_char *)(&ip_addr);
+				while(Xrn->rnode_bit < bitlen){			
+					if(Xrn->rnode_tbit & cp[Xrn->rnode_tbyte]){
+                        /*Fengsb 2019-05-29 ±È½Ïcp¶ÔÓ¦ÓÚµ±Ç°½ÚµãXrnËù¶ÔÓ¦µÄtbitÎ»£¬ÒÔ¾ö¶¨ÏÂÒ»²½xrnµÄÈ¡Öµ
+                        ±¾·ÖÖ§£¬ËµÃ÷cpÓ¦¸ÃÔÚµ±Ç°XrnµÄÓÒ×ÓÊ÷*/
+						Xrn = Xrn->rnode_right;
+					}else{
+					    /*±¾·ÖÖ§ËµÃ÷cpÓ¦¸ÃÔÚµ±Ç°XrnµÄ×ó×ÓÊ÷*/
+						if(Xrn->rnode_right){                            
+                            /*ÏÈÐò±éÀú£¬½ö½öÓÒ×ÓÊ÷ÐèÒªÑ¹Õ»*/
+							*Xsp++ = Xrn->rnode_right;
+						}
+						
+						Xrn = Xrn->rnode_left;
+					}
+					
+					if(!Xrn){                        
+						break;
+					}
+				}
+
+                /*Fengsb 2019-05-29: ???
+                A bug is hiding int the following code 
+                while we travel this RIB, if task is switch and the route-node is delete before this call, 
+                val "cp" has no chance to get new value, so can't walk the rest for RIB */
+#if 0
+                /*Fengsb 2019-05-30 ÕâÒ»¶Î´úÂë»áµ¼ÖÂÈç¹û±éÀúµÄ¹ý³ÌÖÐ£¬ÉÏ´Î½ÚµãÉ¾³ý£¬½«ÎÞ·¨½øÐÐºóÐø½Úµã±éÀú*/
+				if(Xrn && Xrn->rnode_bit == bitlen && (rth = Xrn->rnode_rth)){
+                    vty_output("var_ipRouteEntry: line:%d\n",  __LINE__);
+					int    not_same = FALSE;
+					u_char *cp2 = (u_char *)(&rth->rth_dest);
+					
+					bitlen = (uint16) RN_BYTELEN(bitlen);
+
+                    /*Fengsb 2019-05-29: Ö»ÐèÒª±È·Ç0µÄ¼¸¸ö×Ö½Ú£¬ÓÉÉÏÃæRN_BYTELEN¼ÆËãµÃ³ö*/
+					while(bitlen--){
+						if(*cp++ != *cp2++){
+							not_same = TRUE;
+							break;
+						}
+					}
+
+					if(!not_same){
+#endif
+				if(Xrn && Xrn->rnode_bit >= bitlen && (rth = Xrn->rnode_rth)){
+                    /*Fengsb 2019-05-30 ÕâÒ»¶Î´úÂë»áµ¼ÖÂÈç¹û±éÀúµÄ¹ý³ÌÖÐ£¬ÉÏ´Î½ÚµãÉ¾³ý£¬½øÐÐºóÐø½Úµã±éÀú,
+                    ¶ÔÓÚÐÂÔö½ÚµãÔÚÒÑ¾­±éÀú½ÚµãµÄ¸¸½ÚµãÎ»ÖÃ£¬ÔòÈÔÈ»Ã»ÓÐºÜºÃµÄ´¦Àí°ì·¨¡£³ý·Ç²ÉÓÃ½¨Á¢¾²Ì¬¾µÏñµÄ·½Ê½*/
+					if(1){                                            
+						if(*(Xsp - 1) != Xrn){
+                            /**fengsb 2019-05-29 ??ÕâÖÖÇé¿öÊÇ±ØÈ»³ÉÁ¢µÄ£¬ÎªºÎ»¹ÐèÒªÅÐ¶Ï??????ÁíÍâ£¬Èç¹ûÖ»root»òÕßÓÒ×Ó½Úµã£¬ºÜ¿ÉÄÜXsp
+                            ¾ÍÊÇSTACKÕ»µ×£¬Xsp-1·çÏÕºÜ´ó?????????Ñ¹Õ»£¬ÏÂÒ»²½ÔÙµ¯Õ»£¬ºÁÎÞÒâÒå¡£?????????**/                            
+							*Xsp++ = Xrn;
+						}
+	
+						if(Xsp != Xstack){
+							Xrn = *(--Xsp);
+							while(Xrn){
+								if(Xrn->rnode_left){
+									if(Xrn->rnode_right){
+										*Xsp++ = Xrn->rnode_right;
+									}
+									Xrn_temp = Xrn->rnode_left;
+								}else if(Xrn->rnode_right){
+									Xrn_temp = Xrn->rnode_right;
+								}else if(Xsp != Xstack){
+									Xrn_temp = *(--Xsp);
+								}else{
+									Xrn_temp = NULL;
+								}
+		
+								rth = Xrn->rnode_rth;
+								if(rth){	
+									rt = rth->rth_active;
+									if(rt && BIT_TEST(rt->rt_state, RTS_ACTIVE) && rt->rt_proto != RTPROTO_LOCAL){
+										if(rth->rth_dest == ip_addr && rth->rth_mask == ip_mask){
+											rt_nh_num = rt->rt_nh_num;
+											for(i = 0; i < rt_nh_num; i++){
+												ipv4_rt_nh = &(rt->rt_nh[i]);
+												if(ipv4_rt_nh->nh_ptr){
+													RT_NH_RWLOCK_RD_LOCK(&(ipv4_nh_hash_table[ipv4_rt_nh->nh_ptr->hash_key].nh_list_rwlock));
+													nh_gateway = ipv4_rt_nh->nh_ptr->nh_gateway;
+													nh_index   = ipv4_rt_nh->nh_ptr->nh_index;
+													RT_NH_RWLOCK_RD_UNLOCK(&(ipv4_nh_hash_table[ipv4_rt_nh->nh_ptr->hash_key].nh_list_rwlock));
+	
+													if(!find_same && (nh_gateway == ip_nh_gateway)){
+														find_same++;
+													}else if(find_same && (ip_nh_gateway != 0 || nh_gateway != 0)){ /*Ö»È¡Ò»¸öÏÂÒ»ÌøÎª0µÄÌõÄ¿£¬·ñÔòÎÞ·¨Çø·Öoid*/
+														now_rt		   = rt;
+														now_nh_gateway = nh_gateway;
+														now_nh_index   = nh_index;
+														break;
+													}
+												}
+											}
+	
+											if(now_rt){
+												break;
+											}
+										}else if(find_same || Xrn->rnode_bit >= bitlen){
+											rt_nh_num = rt->rt_nh_num;
+											for(i = 0; i < rt_nh_num; i++){
+												ipv4_rt_nh = &(rt->rt_nh[i]);
+												if(ipv4_rt_nh->nh_ptr){
+													RT_NH_RWLOCK_RD_LOCK(&(ipv4_nh_hash_table[ipv4_rt_nh->nh_ptr->hash_key].nh_list_rwlock));
+													nh_gateway = ipv4_rt_nh->nh_ptr->nh_gateway;
+													nh_index   = ipv4_rt_nh->nh_ptr->nh_index;
+													RT_NH_RWLOCK_RD_UNLOCK(&(ipv4_nh_hash_table[ipv4_rt_nh->nh_ptr->hash_key].nh_list_rwlock));
+	
+													now_rt		   = rt;
+													now_nh_gateway = nh_gateway;
+													now_nh_index   = nh_index;
+	
+													break;
+												}
+											}
+	
+											if(now_rt){                                              
+												break;
+											}
+										}
+									}		
+								}
+	
+								Xrn = Xrn_temp;
+							}
+						}
+					}					
+				}
+			}
+		}
+	}
+
+	if(!now_rt){
+        /*Fengsb 2019-06-12£¬±éÀúÍê³É£¬Ö±½Ó¸ø³ö·µ»ØÖµNULL
+        */
+		vrf_table_leave(vrf_table, RT_RD_LOCK);
+		return NULL;
+	}
+
+	/*Return the name*/
+	memcpy(name, vp->name, (int)(vp->namelen) * sizeof(oid));
+	op = name + 10;
+	cp = (u_char *)&now_rt->rt_rth->rth_dest;
+	*op++ = *cp++;
+	*op++ = *cp++;
+	*op++ = *cp++;
+	*op++ = *cp++;
+	cp = (u_char *)&now_rt->rt_rth->rth_mask;
+	*op++ = *cp++;
+	*op++ = *cp++;
+	*op++ = *cp++;
+	*op++ = *cp++;
+	cp = (u_char *)&now_nh_gateway;
+	*op++ = *cp++;
+	*op++ = *cp++;
+	*op++ = *cp++;
+	*op++ = *cp++;
+	*length = 22;
+
+	*write_method = 0;
+	*var_len = sizeof(long_return);
+
+	switch (vp->magic) {
+	case IPROUTEDEST:
+		long_return = now_rt->rt_rth->rth_dest;
+		break;
+
+	case IPROUTEIFINDEX:
+		long_return = now_nh_index;
+		break;
+
+	case IPROUTEMETRIC1:
+		long_return = now_rt->distance;
+		break;
+		
+	case IPROUTEMETRIC2:
+		long_return = now_rt->metric;
+		break;
+		
+	case IPROUTEMETRIC3:
+		if(now_rt->rt_proto == RTPROTO_OSPF){
+			long_return = now_rt->metric2;
+		}else{ 
+			long_return  = -1;
+		}
+		break;
+		
+	case IPROUTEMETRIC4:
+		long_return = -1;
+		break;
+		
+	case IPROUTEMETRIC5:
+		long_return = -1;
+		break;
+
+	case IPROUTENEXTHOP:
+		long_return = now_nh_gateway;
+		break;
+
+	case IPROUTETYPE:
+		if(now_rt->rt_state & RTS_REMOTE){
+			long_return = 4;
+		}else{
+			/*uint32 iface_flags;
+			
+			rt_get_if_type(now_nh_index, &iface_flags);
+			if((iface_flags & INTERFACE_DEVICE_FLAGS_TYPE_MASK) == INTERFACE_DEVICE_FLAGS_TYPE_NULL){
+				long_return = 2;
+			}else{
+				long_return = 3;
+			}*/
+
+			long_return = 3;
+		}
+		break;
+
+	case IPROUTEPROTO:
+		switch(now_rt->rt_proto){
+		case RTPROTO_DIRECT:
+			long_return = 2;
+			break;
+		case RTPROTO_STATIC:
+			long_return = 3;
+			break;
+		case RTPROTO_RIP:
+			long_return = 8;
+			break;
+		case RTPROTO_ISIS_L1:
+		case RTPROTO_ISIS_L2:
+			long_return = 9;
+			break;
+		case RTPROTO_OSPF:
+			long_return = 13;
+			break;
+		case RTPROTO_BGP:
+			long_return = 14;
+			break;
+		case RTPROTO_BIGP:
+			long_return = 16;
+			break;
+		default:
+			long_return = 1;
+			break;
+		}
+		break;
+
+	case IPROUTEAGE:
+		if(now_rt->rt_facus){
+			long_return = time_sec - now_rt->rt_facus->rt_time;
+		}else{
+			long_return = time_sec;
+		}
+		break;
+
+	case IPROUTEMASK:
+		long_return = now_rt->rt_rth->rth_mask;
+		break;
+
+	case IPROUTEINFO:
+		switch(now_rt->rt_proto){
+		case RTPROTO_RIP:
+			*var_len = sizeof(rip_variables_oid_mib);
+			vrf_table_leave(vrf_table, RT_RD_LOCK);
+			return (u_char *) rip_variables_oid_mib;
+		case RTPROTO_OSPF:
+			*var_len = sizeof(ospf_variables_oid_mib);
+			vrf_table_leave(vrf_table, RT_RD_LOCK);
+			return (u_char *) ospf_variables_oid_mib;
+		case RTPROTO_BGP:
+			*var_len = sizeof(bgp_oid_mib);
+			vrf_table_leave(vrf_table, RT_RD_LOCK);
+			return (u_char *) bgp_oid_mib;
+		case RTPROTO_ISIS_L1:
+		case RTPROTO_ISIS_L2:
+			*var_len = sizeof(isis_oid_mib);
+			vrf_table_leave(vrf_table, RT_RD_LOCK);
+			return (u_char *) isis_oid_mib;
+		default:
+			*var_len = nullOidLen;
+			vrf_table_leave(vrf_table, RT_RD_LOCK);
+			return (u_char *) nullOid;
+		}
+	default:
+		ERROR_MSG("");
+		vrf_table_leave(vrf_table, RT_RD_LOCK);
+		return NULL;
+	}
+
+	vrf_table_leave(vrf_table, RT_RD_LOCK);
+
+	return (u_char *)&long_return;
+}
