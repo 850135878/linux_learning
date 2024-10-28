@@ -1,5 +1,56 @@
 # Rip_switch
 
+## SVI（交换式虚拟接口）
+
+```cmd
+# 进入VLAN 10的VLAN接口
+interface vlan 10 # 进入配置VLAN接口（三层接口）
+```
+
+<img src="./Rip_switch命令.assets/image-20241027135049434.png" alt="image-20241027135049434" style="zoom:50%;" />
+
+### 三层交换机的端口模式
+
+- 二层接口（switchport）
+
+  > 二层交换机只能有一个VLAN接口拥有IP地址，且用于这台设备的管理
+
+  - access模式
+  - trunk模式
+
+- 三层接口
+
+  - 路由接口（no switchport或routed port）
+
+<img src="./Rip_switch命令.assets/image-20241027143529596.png" alt="image-20241027143529596" style="zoom: 67%;" />
+
+```
+# 进入交换机的接口
+int f0/1
+# 将接口设置为二层接口
+switchport mode access
+switchport pvid 10
+
+# 将一个物理接口变为三层接口
+no switchport 
+```
+
+```
+# 三层交换机开启路由功能
+ip routing
+
+```
+
+
+
+
+
+
+
+
+
+
+
 ```c
 # 创建vlan
 int vlan 10
