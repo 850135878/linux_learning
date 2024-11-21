@@ -1,4 +1,4 @@
-# RIP协议
+RIP协议
 
 Routing Information Protocol 路由信息协议，用于在网关和其他主机之间交换路由信息的动态路由协议。
 
@@ -94,6 +94,12 @@ IOU1(config-if)#ip summary-address rip 172.16.0.0 255.255.0.0
 ##### 1.3 路由毒化
 
 开启了路由毒化功能后，就会自动关闭水平分割。标记了中毒的路由信息，其跳数会被设置为无穷大。
+
+> 若在端口处收到了邻居发来的metric为16的路由，且之前不为16，需要将其加入到holddown列表中，并从主路由表中删除，但没从本地rip数据库中删除。（接受路由更新的）
+>
+> -- 如果之前的路由metric是16，现在收到的不是16，将其从holddown中删除，并更新主路由表
+
+
 
 ##### 1.4 抑制计时器
 
@@ -434,13 +440,13 @@ Response报文主要用于更新对方的路由表，通常在以下三种情况
 
 
 
-通常，当要向**所有目的地**发送响应时(即定期更新或触发更新)，将响应发送到每个连接的点对点链路的另一端的主机，并在所有支持广播的连接网络上广播响应。因此，**为每个直连网络准备一个响应，并发送到相应的(目的地或广播)地址**。
+​	通常，当要向**所有目的地**发送响应时(即定期更新或触发更新)，将响应发送到每个连接的点对点链路的另一端的主机，并在所有支持广播的连接网络上广播响应。因此，**为每个直连网络准备一个响应，并发送到相应的(目的地或广播)地址**。
 
-在大多数情况下，这将到达所有相邻的网关。然而，在某些情况下，这可能还不够好。**这可能涉及不支持广播的网络**(例如，ARPANET)，或者涉及**哑网关**的情况。在这种情况下，可能需要指定相邻主机和网关的实际列表，并显式地向每个主机和网关发送数据报。这是留给实现者来决定是否需要这样的机制，并定义如何指定列表。
+​	在大多数情况下，这将到达所有相邻的网关。然而，在某些情况下，这可能还不够好。**这可能涉及不支持广播的网络**(例如，ARPANET)，或者涉及**哑网关**的情况。在这种情况下，可能需要指定相邻主机和网关的实际列表，并显式地向每个主机和网关发送数据报。这是留给实现者来决定是否需要这样的机制，并定义如何指定列表。
 
-触发的更新需要特殊处理有两个原因。首先，经验表明，**触发更新**可能会**在容量有限或网关众多的网络上**造成过大的负载。因此，协议要求实现者包括限制触发更新频率的条款。**在触发更新发送后，应该设置一个计时器，在1到5秒之间随机设置一个时间**。如果在计时器到期之前发生其他会触发更新的变化，则在计时器到期时触发单个更新，然后将计时器设置为1到5秒之间的另一个随机值。如果在被触发的更新发送时间之前有一个常规更新到期，则触发的更新可能会被抑制。
+​	触发的更新需要特殊处理有两个原因。首先，经验表明，**触发更新**可能会**在容量有限或网关众多的网络上**造成过大的负载。因此，协议要求实现者包括限制触发更新频率的条款。**在触发更新发送后，应该设置一个计时器，在1到5秒之间随机设置一个时间**。如果在计时器到期之前发生其他会触发更新的变化，则在计时器到期时触发单个更新，然后将计时器设置为1到5秒之间的另一个随机值。如果在被触发的更新发送时间之前有一个常规更新到期，则触发的更新可能会被抑制。
 
-其次，触发更新不需要包括整个路由表，只需要包括那些已经发生变化的路由。因此，作为触发更新的一部分生成的消息必须至少包括那些设置了路由更改标志的路由。它们可以包括额外的路由，或者所有的路由，由实现者自行决定;但是，当完全路由更新需要多个数据包时，强烈不建议发送所有路由。当处理触发的更新时，应该为每个直连网络生成消息。分割水平处理在生成触发更新和正常更新时完成。
+​	其次，触发更新不需要包括整个路由表，只需要包括那些已经发生变化的路由。因此，作为触发更新的一部分生成的消息必须至少包括那些设置了路由更改标志的路由。它们可以包括额外的路由，或者所有的路由，由实现者自行决定;但是，当完全路由更新需要多个数据包时，强烈不建议发送所有路由。当处理触发的更新时，应该为每个直连网络生成消息。分割水平处理在生成触发更新和正常更新时完成。
 
 
 
@@ -1140,9 +1146,9 @@ rip2IfStatStatus OBJECT-TYPE
 
 <img src="./RIP.assets/image-20240927132611082.png" alt="image-20240927132611082" style="zoom: 67%;" />
 
+D
 
-
-#### 2.2 RIP接口配置表（强制）
+#### 2.2 RIP接口配置表（强制）DD
 
 ##### rip2IfConfTable
 
@@ -1972,4 +1978,120 @@ RIPv2 数据包的创建方式与往常一样，但有以下例外：
 为支持 **RIPv2** 加密认证机制而规范并部署标准化密钥管理协议，将是减少操作风险的显著下一步，并可能实际增加该机制的部署和操作便捷性。这一规范超出了本文档的范围。最近 **IETF** 在 **MSEC** 和 **KINK** 工作组的工作在这方面表现出希望。**IETF NETCONF** 工作组关于标准化路由器安全配置管理方法的工作也与此相关。
 
 最后，我们认为此机制并不是 **RIPv2** 认证的最终方案。相反，我们认为该机制在保持易于正确实施和部署的同时，相较于以前的方法（例如明文密码）显著减少了风险。那些认为该机制不能满足其需求的用户群体可以考虑为 **RIPv2** 使用数字签名。【MBW97】 规范了使用数字签名的 **OSPF**，该文档或许可以作为为 **RIPv2** 协议创建类似规范的起点。与本文档中规定的机制相比，数字签名在计算上代价更高，且在操作上更难部署。然而，本文档中的许多机制可能在使用数字签名时得以重用。
+
+
+
+```c
+void processRedistributeProtocol(int protocol, int argc, char **argv, struct user_data *u) {
+    int rc;
+    struct parameter param;
+    struct redistribute_cmd_struct *ptr;
+
+    // 获取指针并设置协议标志
+    ptr = (struct redistribute_cmd_struct *)u->struct_p[1];
+    ptr->proto_fg = protocol; // redis from proto
+
+    // 检查是否是直接连接路由或静态路由
+    if (protocol != RTPROTO_DIRECT && protocol != RTPROTO_STATIC) {
+        param.type = ARG_UINT;
+        param.min = 1;
+
+        // 根据协议设置最大值
+        if (protocol == RTPROTO_BGP) {
+            param.max = 0xffffffff;
+        } else {
+            param.max = 65535;
+        }
+
+        param.flag = ARG_MIN | ARG_MAX;
+
+        // 获取参数
+        rc = getparameter(argc + 1, argv - 1, u, &param);
+        if (rc != 0) {
+            return rc; // 参数获取失败返回错误码
+        }
+
+        ptr->process = param.value.v_int; // 设置进程号
+    }
+
+    // 如果参数个数为1
+    if (argc == 1) {
+        rc = cmdend(argc - 1, argv + 1, u);
+        if (rc != 0) {
+            return rc; // 命令结束处理返回错误码
+        }
+
+        // 发送分发命令
+        return call_cmd_sendmsg_redistribute(u);
+    } else {
+        u->struct_p[3] = RED_CMD_ROUTE_MAP_MASK;
+
+        // 针对 OSPF 和 OSPF VRF
+        if ((u->cmd_fg & FG_OSPF) || (u->cmd_fg & FG_OSPF_VRF)) {
+            u->struct_p[3] |= (RED_CMD_METRIC_TYPE_MASK | RED_CMD_METRIC_MASK | RED_CMD_TAG_MASK);
+        }
+
+        // 针对 ISIS 协议
+        if ((u->cmd_fg & INDEPEND_FG_PROTO) == FG_ISIS) {
+            BIT_SET(u->struct_p[4], RED_TO_ISIS);
+            u->struct_p[3] |= RED_CMD_ISIS_LEVEL_MASK;
+        }
+
+        // 处理子命令
+        return subcmd(redistribute_map_table, &(u->struct_p[3]), argc, argv, u);
+    }
+}
+```
+
+
+
+```c
+// 包含路由协议的基本信息，记录重分发队列 lp_redistribute
+struct link_protocol
+{
+    struct link_protocol *lp_forw;
+    struct link_protocol *lp_back;
+
+    uint32  lp_proto_fg;   // 从哪个协议重分发进来的
+    uint32  lp_process;    // 从哪个协议的进程重分发进来的
+    void    (*lp_func) (uint32 proto, uint32 process, uint32  type, void *detail);
+
+    struct _qelement lp_redistribute;
+};
+
+
+// 表示某协议的路由重分发配置，包括协议、进程ID、VRF、Route-map等信息。
+struct route_redistribute
+{
+    struct route_redistribute *rr_forw;
+    struct route_redistribute *rr_back;
+
+    unsigned long   proto;     // 重分发进的协议
+    unsigned long   proto_fg;  /*redis_from_protocol*/
+    unsigned long   process;   /*redis_from_process*/
+    unsigned long   type_n;
+    unsigned long   metric;
+    unsigned long   tag;
+    unsigned long   flags;
+    struct route_map_struct rr_map;
+
+    uint32          vrf_id;
+};
+
+
+//输入参数结构，包含重分发协议相关的配置内容
+struct redistribute_cmd_struct
+{
+    uint32   redis_into_protocol;
+    uint32   redis_into_process;
+    uint32   proto_fg;  /*redis_from_protocol;*/
+    uint32   process;   /*redis_from_process;*/
+    uint16   vrf_id;
+    uint8    flags;
+    uint8    ospf_type_n;
+    uint32   ospf_metric;
+    uint32   ospf_tag;
+    char     *route_map_name;
+};
+```
 

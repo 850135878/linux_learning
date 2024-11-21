@@ -70,6 +70,14 @@ ip rip 1 enable
 
 
 
+
+
+
+
+
+
+
+
 ## cmd
 
 ### ip rip \<processid> enable
@@ -108,4 +116,157 @@ ip rip 1 enable
     rip_process_route_activate(pprocess, &msg);
     ```
 
+
+
+
+
+
+- 针对带参数的命令行
+
+  - router rip <process_id>
+
+  ```c
+  param.type = ARG_UINT;
+  param.min = 1;
+  param.max = 65535;
+  param.flag = ARG_MIN | ARG_MAX;
+  
+  // router rip processid
+  rc = getparameter(argc + 1, argv - 1, u, &param);
+  if (rc != 0)
+  {
+      return rc;
+  }
+  
+  processid = param.value.v_int;
+  vrfid = 0;
+  
+  rc = cmdend(argc - 1, argv + 1, u);
+  if (rc != 0)
+  {
+      return rc;
+  }
+  ```
+
+
+
+### 协议配置态命令
+
+- 没有参数的命令行
+
+  - 只有一个命令
+
+    - check-zero-domain          =》 pprocess->flags =  0x02
+    - validate-update-source   =》  pprocess->flags = 0x01
+    - auto-summary                  =》  pprocess->auto_summary_flag = 1
+
+    ```c
+    // 检查参数边界
+    rc = cmdend(argc - 1, argv + 1, u);
     
+    // (u)->struct_s[0]
+    processid = GetProcID( u );
+    
+    ret = rip_lookup_process_byprocessid(processid, &pprocess);
+    if (ret != RIP_SUCCESS)
+    {
+        rip_debug(RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d.\n", __FILE__,__LINE__);
+        return RIP_FAIL;
+    }
+    ```
+
+    
+
+- 带参数的命令
+
+  - 带一个参数
+
+    - default-metric <metric>
+    - version <value>
+    - input-queue <value >
+
+    ```c
+    // 检查参数边界
+    rc = cmdend(argc - 1, argv + 1, u);
+    
+    // processid = u->struct_s[0]
+    // device_index = u->struct_p[1];
+    processid = GetProcID( u );
+    
+    // 获取metric参数
+    param.type = ARG_UINT;
+    param.min = 1;
+    param.max = 16;
+    param.flag = ARG_MIN | ARG_MAX;
+    ret = getparameter(argc + 1, argv - 1, u, &param);
+    if(ret != 0) 
+    {
+        return ret;
+    }
+    
+    pprocess->default_metric = param.value.v_int;
+    ```
+
+    
+
+### 接口配置态命令
+
+#### 不带参数
+
+- ip rip passive       =>  BIT_SET(rip_intf_array[device_index]->special_flag, RIP_PASSIVE_ENABLE);     // 0x01
+
+- ip rip deaf            =>  BIT_SET(rip_intf_array[device_index]->special_flag, RIP_NOTRECV_ENABLE);   // 0x02   
+
+  - 端口上不接收rip报文，但会发送Update更新报文        
+
+- ip rip v1demand/v2demand =>  BIT_SET(rip_intf_array[device_index]->special_flag, RIP_SEND_V1DEMAND); // 0x04
+
+  ​							 BIT_SET(rip_intf_array[device_index]->special_flag, RIP_SEND_V2DEMAND); // 0x08
+
+  - 只发送v1/v2格式的请求报文                         
+
+- ip rip split-horizon simple | poisoned  
+
+  ​                                         => rip_intf_array[device_index]->split_flag |= RIP_SIMPLE_SPLIT_HORIZON_ENABLE; // 0x01
+
+  ​                                         => rip_intf_array[device_index]->split_flag |= RIP_POISONED_SPLIT_HORIZON_ENABLE;  // 0x02
+
+  
+
+#### 带参数
+
+##### 含一个参数
+
+- ip rip send version <version> [compatibilty]
+- ip rip receive version <version>
+
+```c
+ret = cmdend(argc - 1, argv + 1, u);
+if(ret != 0)
+{
+    return ret;
+}
+
+param.type = ARG_UINT;
+param.min = 1;
+param.max = 2;
+param.flag = ARG_MIN | ARG_MAX ;
+ret = getparameter(argc + 1, argv - 1, u, &param);
+if( ret != 0 )
+{
+    return ret;
+}
+device_index = u->struct_p[1];
+
+if( 1 == param.value.v_int )
+{
+    rip_intf_array[device_index]->send_version = RIP_SEND_VERSION_1;
+}
+else if( 2 == param.value.v_int )
+{
+    rip_intf_array[device_index]->send_version = RIP_SEND_VERSION_2_MULTICAST;
+}
+
+
+```
+
