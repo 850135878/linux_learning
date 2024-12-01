@@ -1128,15 +1128,20 @@ int rip_intf_bfd_register(uint32 device_index,uint32 state)
 	if((!device_index) || (device_index > INTERFACE_DEVICE_MAX_NUMBER))return 0;
 	
 	ret = bfd_rip_announce(device_index, RTPROTO_RIP, state, rip_intf_bfd_callback);
+	// rip_intf_bfd_register(device_index, 1);
+	
 	/*bfd have all down need metric==16 when register*/
 	if((ret == 1) && state)
-		rip_intf_bfd_callback(device_index,0);
+		rip_intf_bfd_callback(device_index, 0);
 	else if(ret < 0)
 		rip_debug(RIP_DEBUG_IP_RIP_RETURN, "rip_intf_bfd_register  fail !\n");
 #else
 	return 0;
 #endif
 }
+
+
+// ret = bfd_rip_announce(device_index, RTPROTO_RIP, state, rip_intf_bfd_callback);
 int rip_intf_bfd_callback(uint32 device_index,uint32 up)
 {
 	int ret = 0;

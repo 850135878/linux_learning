@@ -6182,8 +6182,8 @@ int rip_cmd_intf_bfd_enable(int argc, char **argv, struct user *u)
     case NORMAL_FUNC:
 		if(rip_intf_array[device_index]->bfd_enable_flag == 1)
 			break;
-		/*往bfd 注册关注回调*/
-		rip_intf_bfd_register(device_index,1);
+		/*往bfd注册关注回调*/
+		rip_intf_bfd_register(device_index, 1);
 		rip_intf_array[device_index]->bfd_enable_flag = 1;
         break;
     case NOPREF_FUNC:
