@@ -22,11 +22,19 @@
 
 ​	定义两个固定且不同的字符串 ipad 和 opad 如下（“i”和“o”是内部和外部的助记符）：
 
+<<<<<<< Updated upstream
 <img src="./HMAC.assets/image-20241125111118057.png" alt="image-20241125111118057" style="zoom:67%;" />
 
 **计算公式：**
 
 <img src="./HMAC.assets/image-20241125111131306.png" alt="image-20241125111131306" style="zoom:67%;" />
+=======
+<img src="./HMAC.assets/image-20241125101008630.png" alt="image-20241125101008630" style="zoom: 67%;" />
+
+**计算公式：**
+
+<img src="./HMAC.assets/image-20241125101050145.png" alt="image-20241125101050145" style="zoom:67%;" />
+>>>>>>> Stashed changes
 
 
 
@@ -74,6 +82,7 @@
 
 
 
+<<<<<<< Updated upstream
 
 
 
@@ -101,3 +110,5 @@
 > NOT：补位
 
 ​	为了紧凑性，可以用十六进制表示消息。 消息填充的目的是使填充的消息的总长度为 512 的倍数。SHA-1 在计算消息摘要时顺序处理 512 位的块。 下面指定如何执行此填充。 总之，将一个“1”后跟 m 个“0”后跟一个 64 位整数附加到消息末尾，以生成长度为 512 * n 的填充消息。64 位整数是原始消息的长度。 然后，填充的消息由 SHA-1 处理为 n 个 512 位块。
+=======
+>>>>>>> Stashed changes

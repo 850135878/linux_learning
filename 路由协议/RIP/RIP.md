@@ -1981,6 +1981,112 @@ RIPv2 数据包的创建方式与往常一样，但有以下例外：
 
 
 
+
+
+## HMAC
+
+Hash-based Message Authentication Code（基于Hash的消息认证码）
+
+结合**散列函数**和**密钥**，使用**密钥对消息**进行**哈希运算**，生成**固定长度的哈希值**。
+
+HMAC使用的单向散列函数并不仅局限于一种，任何高强度的单向散列函数都可以被用于HMAC。
+
+```
+Hash( opad )
+```
+
+
+
+备注：MD5 最近被证明容易受到碰撞搜索攻击 [Dobb]。
+
+### 定义
+
+​	HMAC 的定义需要一个加密哈希函数（我们用 H 表示）和一个密钥 K（任意长度，最多可达 B（散列函数的块长度））。
+
+​	假设 H 是一个加密的哈希函数，其中通过在数据块上迭代基本压缩函数来对数据进行哈希处理。 用 B 表示此类块的字节长度（对于上述所有哈希函数示例，B=64），用 L 表示哈希输出的字节长度（对于 MD5，L=16；对于 SHA-1，L=20） ）。 
+
+​	 使用大于B 字节（64）的密钥的应用程序将首先使用 H 散列密钥，然后使用生成的 L 字节字符串作为 HMAC 的实际密钥。 在任何情况下，K 的最小推荐长度是 L 字节（作为哈希输出长度）。
+
+​	定义两个固定且不同长度的字段串 ipad 和 opad（内外部区分）：
+
+<img src="./RIP.assets/image-20241122135255193.png" alt="image-20241122135255193" style="zoom: 67%;" />
+
+<img src="./RIP.assets/image-20241122135352622.png" alt="image-20241122135352622" style="zoom:67%;" />
+
+1. 将0附加到K的末尾，以达到64字节长度的字符串    <font color='cornflowerblue'> **例如：K长度为20，B=64，则需要填充44个零字节0x00**</font>
+2. 将步骤 (1) 中计算出的 B 字节字符串与 **ipad（0x36）**  进行 XOR（按位异或）
+3. 将数据流“text” 附加到步骤 (2) 生成的 B 字节字符串
+4. 将 H 应用到步骤 (3) 中生成的流
+5. 将步骤（1）填充的64位字节的K，与opad进行异或操作
+6. 将步骤 (4) 的 H 结果附加到步骤 (5) 产生的 B 字节字符串
+7. 将H应用于步骤(6)中生成的流并输出结果
+
+
+
+### 密钥
+
+​	HMAC的密钥可以是任意长度的，如果大于B（64）字节，需先对密钥K进行哈希处理。 **不建议密钥长度小于L字节，会降低函数的安全强度。**
+
+​	密钥需要随机选择（或使用具有随机种子的加密强伪随机生成器），并定期刷新。 
+
+​	建议输出长度 t 不小于哈希输出长度的一半（以匹配生日攻击界限）并且不小于 80 位（攻击者需要预测的位数的合适下限） ）。
+
+ 	建议将使用具有 t 位输出的哈希函数 H 的 HMAC 实现表示为 HMAC-H-t。 例如，HMAC-SHA1-80 表示使用 SHA-1 函数计算的 HMAC，并将输出截断为 80 位。 （如果未指定参数t，例如HMAC-MD5，则假设输出散列的所有位。）
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ```c
 void processRedistributeProtocol(int protocol, int argc, char **argv, struct user_data *u) {
     int rc;
@@ -1989,7 +2095,7 @@ void processRedistributeProtocol(int protocol, int argc, char **argv, struct use
 
     // 获取指针并设置协议标志
     ptr = (struct redistribute_cmd_struct *)u->struct_p[1];
-    ptr->proto_fg = protocol; // redis from proto
+    ptr->proto_fg = protocol; // redis from protocol
 
     // 检查是否是直接连接路由或静态路由
     if (protocol != RTPROTO_DIRECT && protocol != RTPROTO_STATIC) {
