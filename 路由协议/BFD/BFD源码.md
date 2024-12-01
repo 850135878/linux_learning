@@ -100,10 +100,9 @@ typedef struct rip_intf_
 	struct dynamic_key_list_  key_list;/*邻居的key链表*/
 	struct dynamic_key_list_  key_timeout_list;/*邻居间超时的key链表*/
 	
-	/* 端口enable bfd */
-	uint8 bfd_enable_flag;   /* 0:disable 1:enable */
-    uint8 rip_bfd_sess_up_num;
-    struct rip_bfd_peer_list_ bfd_peer_list;
+	uint8 bfd_enable_flag;   	/* 端口enable bfd，0:disable 1:enable */
+    uint8 rip_bfd_sess_up_num;	/* rip端口bfd会话up数 */
+    struct rip_bfd_peer_list_ bfd_peer_list;/* rip端口bfd邻居链表 */
 }rip_intf_t;
 
 typedef struct rip_bfd_peer_list_ {
@@ -111,10 +110,47 @@ typedef struct rip_bfd_peer_list_ {
     struct rip_bfd_peer_list_ *back;
     uint32 bfd_peer_addr;
     uint8 bfd_peer_up;
-}rip_bfd_peer_list_t
+}rip_bfd_peer_list_t;
 ```
 
 ### RIP模块
+
+#### rip_intf_create_bfd_peer
+
+```c
+/* 创建新的bfd_peer_list */
+int rip_intf_create_bfd_peer(uint32 device_index, uint32 peer_addr){
+    struct rip_intf_ *pintf;
+	struct rip_bfd_peer_list_ *bfd_peer;
+    
+	if((!device_index) || (device_index > INTERFACE_DEVICE_MAX_NUMBER)) 
+        return RIP_FAIL;
+   
+    if((pintf = rip_intf_array[device_index]) == NULL)
+        return RIP_FAIL;
+    
+    bfd_peer = pintf->bfd_peer_list.forw;
+    while(bfd_peer != &pintf->bfd_peer_list){
+        if(bfd_peer->bfd_peer_addr == peer_addr){
+            break;
+        }
+        bfd_peer = bfd_peer->forw;
+    }
+        
+    if(bfd_peer == &pintf->bfd_peer_list){
+        bfd_peer = rip_mem_malloc(sizeof(struct rip_bfd_peer_list_), RIP_NEIGHB_PEER_TYPE);
+    	if (bfd_peer == NULL)
+    	{
+       		return RIP_FAIL;
+    	}
+        INSQUE(bfd_peer, pintf->bfd_peer_list.back);
+    }
+    bfd_peer->bfd_peer_up=0;
+    return RIP_SUCCESS;
+}
+```
+
+
 
 #### rip_intf_bfd_register
 
@@ -124,6 +160,8 @@ int rip_intf_bfd_register(uint32 device_index, uint32 peer_addr, uint8 state)
     struct rip_intf_ *pintf;
     struct rip_peer_list_ *peer;
     struct rip_process_info_ *pprocess;
+    struct rip_bfd_peer_list_ *bfd_peer;
+    
 	int ret;
 	rip_debug(RIP_DEBUG_IP_RIP_MSG, "rip_intf_bfd_register device_index=%d,state = %d\n", device_index,state);
     
@@ -146,6 +184,13 @@ int rip_intf_bfd_register(uint32 device_index, uint32 peer_addr, uint8 state)
              rip_debug(RIP_DEBUG_IP_RIP_RETURN, "rip_intf_bfd_register fail!\n");
              return RIP_FAIL;
         }  
+        
+        ret = rip_intf_create_bfd_peer(pintf->device_index, peer_addr);
+        if(ret < 0){
+             rip_debug(RIP_DEBUG_IP_RIP_RETURN, "rip_intf_bfd_register fail!\n");
+             return RIP_FAIL;
+        }  
+        
         return RIP_SUCCESS;
     }
     
@@ -159,6 +204,12 @@ int rip_intf_bfd_register(uint32 device_index, uint32 peer_addr, uint8 state)
                 rip_debug(RIP_DEBUG_IP_RIP_RETURN, "rip_intf_bfd_register fail!\n");
                 return RIP_FAIL;
             }     
+            
+            ret = rip_intf_create_bfd_peer(pintf->device_index, peer_addr);
+        	if(ret < 0){
+            	rip_debug(RIP_DEBUG_IP_RIP_RETURN, "rip_intf_bfd_register fail!\n");
+            	return RIP_FAIL;
+        	}  
         }
         rip_peer = rip_peer->forw;
     }
@@ -431,15 +482,24 @@ int rip_intf_bfd_callback(uint32 src_ip, uint32 dst_ip, uint32 connected, uint32
         
         if(!bfd_peer->bfd_peer_up){
             pintf->rip_bfd_sess_up_num++;
+            if(pintf->rip_bfd_sess_up_num==1){
+                 /* 打上进程端口激活的标志*/
+				BIT_SET(pintf->state , RIP_INTF_PROCESS_ACTIVE);
+                ret = rip_process_intf_activate(device_index , TRUE);
+            }else{
+				/*端口发送request单播报文*/
+				ret = rip_send_response(device_index, dst_ip, htons(RIP_PORT));
+				if( RIP_SUCCESS != ret )
+				{
+					rip_debug( RIP_DEBUG_IP_RIP_RETURN, "RIP: %s %d .\n",__FILE__,__LINE__);
+					return RIP_FAIL;
+				}
+            }
+			bfd_peer->bfd_peer_up == 1;    
         }
-        bfd_peer->bfd_peer_up == 1;
-        if(BIT_TEST(pintf->state , RIP_INTF_PROCESS_ACTIVE))
-			return RIP_SUCCESS;
         
-        /* 打上进程端口激活的标志*/
-		BIT_SET(pintf->state , RIP_INTF_PROCESS_ACTIVE);
-		ret = rip_process_intf_activate(device_index , TRUE);
 	}
+    return RIP_SUCCESS;
 }
 ```
 
