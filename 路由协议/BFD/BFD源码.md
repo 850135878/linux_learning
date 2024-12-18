@@ -131,22 +131,55 @@ int rip_intf_create_bfd_peer(uint32 device_index, uint32 peer_addr){
     
     bfd_peer = pintf->bfd_peer_list.forw;
     while(bfd_peer != &pintf->bfd_peer_list){
-        if(bfd_peer->bfd_peer_addr == peer_addr){
+    	if(bfd_peer->bfd_peer_addr == peer_addr){
             break;
         }
-        bfd_peer = bfd_peer->forw;
-    }
-        
+       	bfd_peer = bfd_peer->forw;
+    } 
+    
     if(bfd_peer == &pintf->bfd_peer_list){
-        bfd_peer = rip_mem_malloc(sizeof(struct rip_bfd_peer_list_), RIP_NEIGHB_PEER_TYPE);
-    	if (bfd_peer == NULL)
-    	{
-       		return RIP_FAIL;
-    	}
+        bfd_peer = rip_mem_malloc(sizeof(struct rip_bfd_peer_list_), RIP_BFD_PEER_TYPE);
+        if (bfd_peer == NULL)
+        {
+            return RIP_FAIL;
+        }
         INSQUE(bfd_peer, pintf->bfd_peer_list.back);
     }
     bfd_peer->bfd_peer_up=0;
     return RIP_SUCCESS;
+}
+```
+
+#### rip_inft_del_bfd_peer
+
+```c
+int rip_inft_del_bfd_peer(uint32 device_index,uint32 peer_addr){
+    struct rip_intf_ *pintf;
+	struct rip_bfd_peer_list_ *bfd_peer, *bfd_peer_temp;
+    
+    if((!device_index) || (device_index > INTERFACE_DEVICE_MAX_NUMBER)) 
+        return RIP_FAIL;
+   
+    if((pintf = rip_intf_array[device_index]) == NULL)
+        return RIP_FAIL;
+    
+	bfd_peer = pintf->bfd_peer_list.forw;
+	while (bfd_peer != &pintf->bfd_peer_list)
+	{
+		bfd_peer_temp = bfd_peer->forw;
+        /* 删除指定bfd peer */
+        if(peer_addr != 0 && bfd_peer->peer_addr == peer_addr){
+            REMQUE(bfd_peer);
+			rip_mem_free(bfd_peer, RIP_BFD_PEER_TYPE);
+            break;
+        }else if(peer_addr == 0){
+            REMQUE(bfd_peer);
+			rip_mem_free(bfd_peer, RIP_BFD_PEER_TYPE);
+        }
+        bfd_peer = bfd_peer_temp;
+	}
+    
+	return RIP_SUCCESS;
 }
 ```
 
@@ -155,6 +188,7 @@ int rip_intf_create_bfd_peer(uint32 device_index, uint32 peer_addr){
 #### rip_intf_bfd_register
 
 ```c
+/* peer_addr:0 对已存在peer建立bfd会话，不为0，根据指定peer建立会话 */
 int rip_intf_bfd_register(uint32 device_index, uint32 peer_addr, uint8 state)
 {
     struct rip_intf_ *pintf;
@@ -178,19 +212,27 @@ int rip_intf_bfd_register(uint32 device_index, uint32 peer_addr, uint8 state)
     }
 	
     /* 注册指定peer的bfd会话 */
-    if(peer_addr!=0){
+    if(peer_addr != 0){
         ret = bfd_proto_announce(pintf->address, peer_addr, 0, RTPROTO_RIP, pintf->process_id, !state, rip_intf_bfd_callback);
         if(ret < 0){
-             rip_debug(RIP_DEBUG_IP_RIP_RETURN, "rip_intf_bfd_register fail!\n");
+             rip_debug(RIP_DEBUG_IP_RIP_RETURN,rip_intf_bfd_register,device_index=%d,state=%d fail! \n", device_index, state);
              return RIP_FAIL;
         }  
         
-        ret = rip_intf_create_bfd_peer(pintf->device_index, peer_addr);
-        if(ret < 0){
-             rip_debug(RIP_DEBUG_IP_RIP_RETURN, "rip_intf_bfd_register fail!\n");
-             return RIP_FAIL;
-        }  
-        
+        /* 添加bfd邻居 */
+        if(state){
+            ret = rip_intf_create_bfd_peer(pintf->address, peer->peer_addr);
+            if(ret < 0){
+                rip_debug(RIP_DEBUG_IP_RIP_RETURN,rip_intf_bfd_register,device_index=%d,state=%d fail! \n", device_index, state);
+                return RIP_FAIL;
+            }  
+        }else{/* 删除bfd邻居 */
+            ret = rip_intf_del_bfd_peer(pintf->address, peer->peer_addr);
+            if(ret < 0){
+                rip_debug(RIP_DEBUG_IP_RIP_RETURN,rip_intf_bfd_register,device_index=%d,state=%d fail! \n", device_index, state);
+                return RIP_FAIL;
+            }  
+        }
         return RIP_SUCCESS;
     }
     
@@ -201,15 +243,24 @@ int rip_intf_bfd_register(uint32 device_index, uint32 peer_addr, uint8 state)
         {
             ret = bfd_proto_announce(pintf->address,peer->peer_addr, 0, RTPROTO_RIP, pintf->process_id, !state, rip_intf_bfd_callback);
             if(ret < 0){
-                rip_debug(RIP_DEBUG_IP_RIP_RETURN, "rip_intf_bfd_register fail!\n");
+                rip_debug(RIP_DEBUG_IP_RIP_RETURN,rip_intf_bfd_register,device_index=%d,state=%d fail! \n", device_index, state);
                 return RIP_FAIL;
             }     
             
-            ret = rip_intf_create_bfd_peer(pintf->device_index, peer_addr);
-        	if(ret < 0){
-            	rip_debug(RIP_DEBUG_IP_RIP_RETURN, "rip_intf_bfd_register fail!\n");
-            	return RIP_FAIL;
-        	}  
+            /* 添加bfd邻居 */
+            if(state){
+                ret = rip_intf_create_bfd_peer(pintf->address, peer->peer_addr);
+            	if(ret < 0){
+                	rip_debug(RIP_DEBUG_IP_RIP_RETURN,rip_intf_bfd_register,device_index=%d,state=%d fail! \n", device_index, state);
+                	return RIP_FAIL;
+            	}  
+            }else{ /* 删除bfd邻居 */
+                ret = rip_intf_del_bfd_peer(pintf->address, peer->peer_addr);
+                if(ret < 0){
+                    rip_debug(RIP_DEBUG_IP_RIP_RETURN,rip_intf_bfd_register,device_index=%d,state=%d fail! \n", device_index, state);
+                    return RIP_FAIL;
+                }  
+        	}
         }
         rip_peer = rip_peer->forw;
     }
@@ -246,7 +297,7 @@ int rip_cmd_intf_bfd_enable(int argc, char **argv, struct user *u)
     case NORMAL_FUNC:
 		if(pintf->bfd_enable_flag == 1)
 			break;
-		/*往bfd 注册关注回调*/
+		/* 往bfd注册关注回调 */
 		ret = rip_intf_bfd_register(device_index, 0, 1);
         if(ret != 0){
              return RIP_FAIL;
@@ -262,16 +313,15 @@ int rip_cmd_intf_bfd_enable(int argc, char **argv, struct user *u)
         if(ret != 0){
             return RIP_FAIL;
         }
-		rip_intf_array[device_index]->bfd_enable_flag = 0;
-		/*端口实际状态up，rip端口需up*/
+        rip_intf_array[device_index]->bfd_enable_flag = 0;
+            
+       	/*端口实际状态up，rip端口需up*/
 		if(BIT_TEST(rt_get_if_status(device_index), RIP_INTF_LINK_UP)){
-			rip_debug(RIP_DEBUG_IP_RIP_MSG, "rip intf RIP_INTF_LINK_UP no use bfd\n");
-			if((pintf->address == 0) || (!BIT_TEST(pintf->state ,RIP_INTF_LINK_UP)))
-				return RIP_FAIL;
-        
-            if(BIT_TEST(pintf->state , RIP_INTF_PROCESS_ACTIVE))
+			rip_debug(RIP_DEBUG_IP_RIP_MSG, "rip intf RIP_INTF_LINK_UP no use bfd\n");        
+            
+        	if(BIT_TEST(rt_get_if_status(device_index), RIP_INTF_PROCESS_ACTIVE))
 				return RIP_SUCCESS;
-        
+            
         	/* 打上进程端口激活的标志*/
 			BIT_SET(pintf->state , RIP_INTF_PROCESS_ACTIVE);
 			ret = rip_process_intf_activate(device_index , TRUE);
@@ -314,19 +364,6 @@ enum RIP_MALLOC_TYPE
     
     ....
 }
-
-int rip_intf_del(uint32 device_index){
-	/* 清空内存 */
-    struct rip_bfd_peer_list_ *bfd_peer, *bfd_peer_temp;
-	bfd_peer = rip_intf_array[device_index]->bfd_peer_list.forw;
-	while (bfd_peer != &rip_intf_array[device_index]->bfd_peer_list)
-	{
-		bfd_peer_temp = bfd_peer;
-		bfd_peer = bfd_peer->forw;
-		REMQUE(bfd_peer_temp);
-		rip_mem_free(bfd_peer_temp, RIP_NEIGHB_PEER_TYPE);
-	}
-}
 ```
 
 
@@ -334,7 +371,6 @@ int rip_intf_del(uint32 device_index){
 #### rip_recv_packet
 
 ```c
-struct rip_bfd_peer_list_ *bfd_peer;
 
 /*if not find the peer, then create a new one*/
 if (peer == &(pprocess->peer_list))
@@ -358,24 +394,6 @@ if (peer == &(pprocess->peer_list))
             rip_debug(RIP_DEBUG_IP_RIP_RETURN, "rip_intf_bfd_register fail !\n");
             return RIP_FAIL;
         }  
-        
-        bfd_peer = pintf->bfd_peer_list.forw;
-        while(bfd_peer != &pintf->bfd_peer_list){
-            if(bfd_peer->bfd_peer_addr == peer->peer_addr){
-                break;
-            }
-            bfd_peer = bfd_peer->forw;
-        }
-        
-        if(bfd_peer == &pintf->bfd_peer_list){
-            bfd_peer = rip_mem_malloc(sizeof(struct rip_bfd_peer_list_), RIP_NEIGHB_PEER_TYPE);
-    		if (bfd_peer == NULL)
-    		{
-       			return RIP_FAIL;
-    		}
-            INSQUE(bfd_peer, pintf->bfd_peer_list.back);
-        }
-        bfd_peer->bfd_peer_up=0;
     }
     
     if (!sys_timer_run(pprocess->peer_timer_id) && (pprocess->peer_timer_id != 0))
@@ -503,28 +521,6 @@ int rip_intf_bfd_callback(uint32 src_ip, uint32 dst_ip, uint32 connected, uint32
 }
 ```
 
-#### rip_inft_bfd_peer_del
-
-```c
-int rip_bfd_peer_del(uint32 device_index, uint32 peer_addr){
-	struct rip_bfd_peer_list_ *bfd_peer, *bfd_peer_temp;
-	bfd_peer = rip_intf_array[device_index]->bfd_peer_list.forw;
-	while (bfd_peer != &rip_intf_array[device_index]->bfd_peer_list)
-	{
-		bfd_peer_temp = bfd_peer;
-		bfd_peer = bfd_peer->forw;
-		if(bfd_peer_temp->bfd_peer_addr == peer_addr){
-			REMQUE(bfd_peer_temp);
-			rip_mem_free(bfd_peer_temp, RIP_NEIGHB_PEER_TYPE);
-			break;
-		}
-	}
-	return RIP_SUCCESS;
-}
-```
-
-
-
 #### rip_intf_del_peers
 
 ```c
@@ -542,14 +538,12 @@ int rip_intf_del_peers(uint32 device_index)
 	while(peer!=&(pprocess->peer_list))
 	{
 		next=peer->forw;
-		if(peer->peer_intf==device_index)
+		if(peer->peer_intf == device_index)
 		{
 			cnt++;
             if(pintf->bfd_enable_flag){
-                /* 将bfd_peer删除 */
-                rip_bfd_peer_del(device_index, peer_addr);
                 /* 注销bfd */
-        		ret = ret = rip_intf_bfd_register(pintf->device_index, peer->peer_addr, 0);
+        		ret = rip_intf_bfd_register(pintf->device_index, peer->peer_addr, 0);
                 if(ret < 0){
                 	rip_debug(RIP_DEBUG_IP_RIP_RETURN, "rip_intf_del_peers failed!\n");
                 	return 0;
@@ -608,8 +602,6 @@ int rip_peer_timeout(uint32 processid)
             for(intf_list = pprocess->intf_list->forw; intf_list != &(pprocess->intf_list); intf_list = intf_list->forw){
                 pintf = intf_list->pintf;
                 if(!pintf && pintf->bfd_enable_flag && peer->peer_intf == pintf->device_index ){
-                    /* 将bfd_peer删除 */
-                	rip_bfd_peer_del(pintf->device_index, peer_addr);
                     /* 注销bfd */
         			ret = rip_intf_bfd_register(pintf->device_index, peer->peer_addr, 0);
                	 	if(ret < 0){
@@ -637,8 +629,6 @@ int rip_peer_timeout(uint32 processid)
             for(intf_list = pprocess->intf_list->forw; intf_list != &(pprocess->intf_list); intf_list = intf_list->forw){
                 pintf = intf_list->pintf;
                 if(!pintf && pintf->bfd_enable_flag){
-                    /* 将bfd_peer删除 */
-                	rip_bfd_peer_del(pintf->device_index, peer_addr);
                     /* 注销bfd */
         			ret = rip_intf_bfd_register(pintf->device_index, peer->peer_addr, 0);
                	 	if(ret < 0){
@@ -675,8 +665,6 @@ int rip_peer_timeout(uint32 processid)
 *int bfd_proto_announce(uint32 src_ip, uint32 dst_ip, uint8 connected, uint32 proto,
 					   uint32 process, uint32 nbr_state, int (*callback)(uint32 src_ip, uint32 dst_ip, uint32 connected, uint32 down))
 */
-    
-int bfd_proto_announce(uint32 if_index, uint32 neigh_addr, uint32 proto, uint32 state, int (*callback)(uint32 if_index, uint32 down));
 
 #define BFD_PROTO_RIP RTPROTO_RIP
 (proto==BFD_PROTO_RIP)? "RIP" : (proto==BFD_PROTO_RIP)? "RIP" : \

@@ -22,19 +22,11 @@
 
 ​	定义两个固定且不同的字符串 ipad 和 opad 如下（“i”和“o”是内部和外部的助记符）：
 
-<<<<<<< Updated upstream
 <img src="./HMAC.assets/image-20241125111118057.png" alt="image-20241125111118057" style="zoom:67%;" />
 
 **计算公式：**
 
 <img src="./HMAC.assets/image-20241125111131306.png" alt="image-20241125111131306" style="zoom:67%;" />
-=======
-<img src="./HMAC.assets/image-20241125101008630.png" alt="image-20241125101008630" style="zoom: 67%;" />
-
-**计算公式：**
-
-<img src="./HMAC.assets/image-20241125101050145.png" alt="image-20241125101050145" style="zoom:67%;" />
->>>>>>> Stashed changes
 
 
 
@@ -82,7 +74,6 @@
 
 
 
-<<<<<<< Updated upstream
 
 
 
@@ -110,5 +101,112 @@
 > NOT：补位
 
 ​	为了紧凑性，可以用十六进制表示消息。 消息填充的目的是使填充的消息的总长度为 512 的倍数。SHA-1 在计算消息摘要时顺序处理 512 位的块。 下面指定如何执行此填充。 总之，将一个“1”后跟 m 个“0”后跟一个 64 位整数附加到消息末尾，以生成长度为 512 * n 的填充消息。64 位整数是原始消息的长度。 然后，填充的消息由 SHA-1 处理为 n 个 512 位块。
-=======
->>>>>>> Stashed changes
+
+
+
+
+
+
+
+### sha256
+
+<img src="./HMAC.assets/image-20241203090921105.png" alt="image-20241203090921105" style="zoom:67%;" />
+
+​	SHA-224 和 SHA-256 使用相同的 64 个恒定 32 位字序列 K0、K1、...、K63。 这些字表示前 64 个素数的立方根的小数部分的前 32 位。 在十六进制中，这些常量字如下（从左到右）：
+
+```c
+428a2f98 71374491 b5c0fbcf e9b5dba5
+3956c25b 59f111f1 923f82a4 ab1c5ed5
+d807aa98 12835b01 243185be 550c7dc3
+72be5d74 80deb1fe 9bdc06a7 c19bf174
+e49b69c1 efbe4786 0fc19dc6 240ca1cc
+2de92c6f 4a7484aa 5cb0a9dc 76f988da
+983e5152 a831c66d b00327c8 bf597fc7
+c6e00bf3 d5a79147 06ca6351 14292967
+27b70a85 2e1b2138 4d2c6dfc 53380d13
+650a7354 766a0abb 81c2c92e 92722c85
+a2bfe8a1 a81a664b c24b8b70 c76c51a3
+d192e819 d6990624 f40e3585 106aa070
+19a4c116 1e376c08 2748774c 34b0bcb5
+391c0cb3 4ed8aa4a 5b9cca4f 682e6ff3
+748f82ee 78a5636f 84c87814 8cc70208
+90befffa a4506ceb bef9a3f7 c67178f2
+```
+
+​	对于 SHA-256，初始哈希值 H(0) 由以下 8个32 位字（十六进制）组成。 这些字是通过取前八个质数的平方根的小数部分的前三十二位而获得的。
+
+```c
+H(0)0 = 6a09e667
+H(0)1 = bb67ae85
+H(0)2 = 3c6ef372
+H(0)3 = a54ff53a
+H(0)4 = 510e527f
+H(0)5 = 9b05688c
+H(0)6 = 1f83d9ab
+H(0)7 = 5be0cd19
+```
+
+
+
+```c
+For i = 1 to N
+	1. Prepare the message schedule W:
+		For t = 0 to 15
+			Wt = M(i)t
+		For t = 16 to 63
+			Wt = SSIG1(W(t-2)) + W(t-7) + SSIG0(t-15) + W(t-16)
+            
+	2. Initialize the working variables:
+		a = H(i-1)0
+		b = H(i-1)1
+		c = H(i-1)2
+		d = H(i-1)3
+		e = H(i-1)4
+		f = H(i-1)5 
+		g = H(i-1)6
+		h = H(i-1)7
+            
+	3. Perform the main hash computation:
+		For t = 0 to 63
+			T1 = h + BSIG1(e) + CH(e,f,g) + Kt + Wt
+			T2 = BSIG0(a) + MAJ(a,b,c)
+			h = g
+			g = f
+			f = e
+			e = d + T1
+			d = c
+			c = b
+			b = a
+			a = T1 + T2
+            
+    4. Compute the intermediate hash value H(i):
+		H(i)0 = a + H(i-1)0
+		H(i)1 = b + H(i-1)1
+		H(i)2 = c + H(i-1)2
+		H(i)3 = d + H(i-1)3
+		H(i)4 = e + H(i-1)4
+		H(i)5 = f + H(i-1)5
+		H(i)6 = g + H(i-1)6
+		H(i)7 = h + H(i-1)7
+```
+
+
+
+```
+struct hash {
+const char *name;
+SHAversion whichSha;
+int hashsize;
+struct {
+const char *testarray;
+int length;
+long repeatcount;
+int extrabits;
+int numberExtrabits;
+const char *resultarray;
+} tests[TESTCOUNT];
+const char *randomtest;
+const char *randomresults[RANDOMCOUNT];
+
+```
+
