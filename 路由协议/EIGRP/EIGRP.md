@@ -15,7 +15,7 @@
 
 ## 特点
 
-- 高级距离矢量
+- 高级距离矢量路由协议
 - 快速收敛
 - 支持VLSM（可变子网）和不连续子网CIDR（超网）
 - 部分更新，带宽占用少
@@ -53,19 +53,66 @@
 
 ​	在Active状态下，路由器与其邻居协调，主动参与重新计算成本最低的无环路径。每次检测到拓扑改变时，都会重新评估状态，并可能更改状态。`拓扑更改：指任何邻居添加、更改或从EIGRP拓扑表删除到目的地的CD的多种事件`
 
-​	如果路径不满足FC，该路由就会处于Active状态，并相所有邻居发送请求，以寻找新的无环路径。
+​	**如果路径不满足FC，该路由就会处于Active状态**，并相所有邻居发送请求，以寻找新的无环路径。
+
+**<font color='red'>注意：如果未通过FC的邻居提供了最低成本路径，则认为该路由处于 ACTIVE 状态，因此不能保证该路径无环路。</font>**
+
+> 当当前最小总成本路径发生故障并且下一个最小总成本路径穿过不是FS时，在拓扑改变期间可能会发生这种情况。
+
+
 
 ### Passive
 
 ​	处于Passive状态的路由，至少存在一条总成本最小的路径，且最少存在一个可行后继者以及一条后继路由。提供总成本最小路径的可行后继者也称为后继者。
 
-<font color='red'>注意：</font><font color='red'>如果总成本最小的路径不是由后继路由器提供的，则该路由处于Active状态，需要重新计算。</font>
+<font color='red'>注意：</font><font color='red'>如果总成本最小的路径不是由S提供的，则该路由处于Active状态，需要重新计算。</font>
 
 >  虽然这些邻居保证提供无环路路径，但该路径可能不是最短的可用路径。
 
 
 
+## 分配编码
+
+### 1.协议分配编码
+
+`外部协议`字段：用于表示获知该路由的原始路由协议：
+
+```c
+Protocols	Value
+IGRP		  1
+EIGRP         2
+Static        3
+RIP           4
+HELLO         5
+OSPF          6
+ISIS          7
+EGP           8
+BGP           9
+IDRP          10
+Connected     11
+```
+
+### 2.目的地址分配编码
+
+目的地类型根据 IANA 地址系列号码分配进行编码。
+
+```c
+AFI Description				AFI Number
+--------------------------------------
+IP (IP version 4)			    1
+IP6 (IP version 6) 			    2
+EIGRP Common Service Family   16384
+EIGRP IPv4 Service Family	  16385
+EIGRP IPv6 Service Family	  16386
+```
+
+
+
 ## 报文格式
+
+> EIGRP数据包直接将封装到网络层协议中，例如IPv4或IPv6。
+>
+> IPv4和IPv6**协议标识符**都使用88
 
 ### 1. EIGRP Packet Header
 
@@ -81,91 +128,264 @@
   > EIGRP_OPC_REPLY	       4
   > EIGRP_OPC_HELLO	      5
   >
-  > Reserved			       6	   IPX SAP
-  >
   > EIGRP_OPC_SIAQUERY	10	SIA查询
-  > EIGRP_OPC_SIAREPLY	  11	SIA答复
+  >EIGRP_OPC_SIAREPLY	  11	SIA答复
+  
+- Checksum：标准的IP校验和。它是基于除了IP头部的整个EIGRP数据包来计算的。`计算时将checknum字段置为0`
 
-- Checksum：标准的 IP 校验和。它是基于除了IP头部的整个EIGRP数据包来计算的。
-
-- Flag：定义数据包的特殊处理。 目前有四个已定义的标志位。
+- Flag：定义数据包的特殊处理。 
 
   > INIT-Flag (0x01)：在发送给新发现邻居的初始UPDATE包中设置。 它指示向邻居通告其全部路由。
   >
-  > CR-Flag (0x02)：该位指示接收器仅在处于条件接收模式时才应接受数据包。 
+  > CR-Flag (0x02)：该位表示路由器仅在处于**条件接收模式**时才接收数据包。 
   >
-  > ​			     当路由器接收并处理带有SEQUENCE TLV的HELLO 数据包时，路由器进入条件接收模式。  
+  > ​			     当路由器接收并处理带有<font color='red'>`SEQUENCE TLV的HELLO数据包`</font>时，路由器进入条件接收模式。  
   >
-  > RS-Flag (0x04)：在重启期间，HELLO和UPDATE数据包中设置重启标志。 路由器查看 RSFlag 以检测邻居是否正在重新启动。 				从重启路由器的角度来看，如果相邻路由器检测到设置了RS-Flag，它将维持邻接关系，并在其UPDATE数据				包中设置RS-Flag以指示它正在进行软重启。  
+  > RS-Flag (0x04)：在重启期间，HELLO和UPDATE数据包中设置重启标志。 
   >
-  > EOT-Flag (0x08)：End-of-Table 标志标志着与邻居的启动过程的结束。 如果设置了该标志，则表明邻居已完成发送所有 				UPDATE。 此时，路由器将删除在重启事件之前从邻居获知的所有陈旧路由。 陈旧路由是指在重新启动之前				存在且未被邻居通过 UPDATE 刷新的任何路由。
+  > ​				路由器查看RSFlag以检测邻居是否正在重新启动。如果相邻路由器检测到设置了RS-Flag，它将维持邻接关				系，并在其UPDATE数据包中设置RS-Flag以指示它正在进行软重启。  
+  >
+  > EOT-Flag (0x08)：End-of-Table 标志着与邻居的启动过程的结束。 如果设置了该标志，则表明邻居已完成发送所有 				UPDATE。 此时，路由器将删除在重启事件之前从邻居获知的所有陈旧路由。 陈旧路由是指在重新启动之前				存在且未被邻居通过 UPDATE 刷新的任何路由。
 
-- Sequence Number：传输的每个数据包都将具有一个 32 位序列号，该序列号对于发送路由器而言是唯一的。
+- Sequence Number：传输的每个数据包都将具有一个32位序列号，该序列号对于发送路由器而言是唯一的。
 
-  ​				     值 0 表示不需要确认。
+  ​				     值0表示不需要确认。
 
 - Acknowledgment Number：数据包接收方正在确认的 32 位序列号。 
 
-  - 如果该值为 0，则不存在确认。 
+  - 如果seq num值为 0，则不需要确认。 
 
-  - 非零值只能出现在单播寻址的数据包中。<font color='red'> 具有非零 ACK 字段的 HELLO 数据包应被解码为 ACK 数据包而不是 HELLO 数据包。</font>
+  - 非零值只能出现在单播数据包中。<font color='red'> 具有非零 ACK 字段的 HELLO 数据包应被解码为 ACK 数据包而不是 HELLO 数据包。</font>
 
     > 注意，如果数据包本身是单播的，这里的 ACK 字段只能是非零的，因为确认数据包从来都不是组播的。
 
-- Virtual Router Identifier (VRID)：一个 16 位数字，用于标识与该数据包关联的虚拟路由器。 
+- Virtual Router Identifier (VRID)：一个16位数字，用于标识与该数据包关联的虚拟路由器。 
   - 0x0000  Unicast Address Family
   - 0x0001  Multicast Address Family
-  - 0x0002-0x7FFF  Reserved
   - 0x8000  Unicast Service Family
-  - 0x8001-0xFFFF  Reserved
-- Autonomous System Number：发送系统的16位无符号数。 该字段间接用作认证值。 也就是说，接收并接受来自邻居的数据包的路由器必须具有相同的 AS 号，否则该数据包将被忽略。 有效 AS 编号的范围是 1 到 65,535。
+  
+- Autonomous System Number：发送系统的16位无符号数。 该字段间接用作认证值。 也就是说，接收并接受来自邻居的数据包的路由器必须具有相同的AS号，否则该数据包将被忽略，有效AS编号的范围是1到65,535。
 
 ### 2. EIGRP TLV Encoding Format
 
-​	每一个 TLV字段都包含2个八位字节的类型号、一个指定 TLV 字段长度的2个八位组字节的字段和一个由类型决定其格式的可变字段。
+> TLV：type、length以及value
+
+​	每一个TLV字段都包含2个八位字节的类型号、一个指定TLV字段长度的2个八位字节字段和一个由类型决定其格式的可变字段。
 
 <img src="./EIGRP.assets/image-20241219141112213.png" alt="image-20241219141112213" style="zoom: 67%;" />
 
-- Type high：
+#### 2.1 Type
 
-  |   Protocol    |  ID  | Version |
-  | :-----------: | :--: | :-----: |
-  |    General    | 0x00 |   1.2   |
-  |     IPv4      | 0x01 |   1.2   |
-  |     IPv6      | 0x04 |   1.2   |
-  |      SAF      | 0x05 |   3.0   |
-  | Multiprotocol | 0x06 |   2.0   |
+类型字段的结构分为Type high以及Type low。
 
-  <img src="./EIGRP.assets/image-20241219142957343.png" alt="image-20241219142957343" style="zoom: 50%;" />
+Type high：定义协议分类的1个八位字节
 
-- Length：是一个2个八位字节的无符号数，表示TLV的长度。 该值包括类型和长度字段。
+|   Protocol    |  ID  | Version |
+| :-----------: | :--: | :-----: |
+|    General    | 0x00 |   1.2   |
+|     IPv4      | 0x01 |   1.2   |
+|     IPv6      | 0x04 |   1.2   |
+|      SAF      | 0x05 |   3.0   |
+| Multiprotocol | 0x06 |   2.0   |
 
-- Value：一个多八位字节字段，包含 TLV 的有效负载
+<img src="./EIGRP.assets/image-20241219142957343.png" alt="image-20241219142957343" style="zoom: 50%;" />
+
+#### 2.2 Length
+
+2个八位字节的无符号数，表示TLV的长度。 该值包括类型和长度字段。
+
+#### 2.3 Value
+
+Value：一个多八位字节字段，包含 TLV 的有效载荷
 
 
 
-#### 2.1 IP内部路由的TLV
+### 3. EIGRP Generic TLV Definitions
+
+| Type                    | Ver 1.2 | Ver 2.0 |
+| ----------------------- | ------- | ------- |
+| PARAMETER_TYPE          | 0x0001  | 0x0001  |
+| AUTHENTICATION_TYPE     | 0x0002  | 0x0002  |
+| SEQUENCE_TYPE           | 0x0003  | 0x0003  |
+| SOFTWARE_VERSION_TYPE   | 0x0004  | 0x0004  |
+| MULTICAST_SEQUENCE_TYPE | 0x0005  | 0x0005  |
+| PEER_INFORMATION_TYPE   | 0x0006  | 0x0006  |
+| PEER_TERMINATION_TYPE   | 0x0007  | 0x0007  |
+| PEER_TID_LIST_TYPE      | ------- | 0x0008  |
+
+#### 3.1 PARAMETER_TYPE - 0x0001
+
+​	该TLV在**HELLO数据包**中用于传达EIGR 度量系数值： **101000**
+
+​		表示为“K 值”以及Hold Time值。 当发现邻居时，此 TLV 还会用在**初始UPDATE数据包**中。
+
+<img src="./EIGRP.assets/image-20241223130450909.png" alt="image-20241223130450909" style="zoom:67%;" />
+
+
+
+#### 3.2 AUTHENTICATION_TYPE - 0x0002
+
+​	该TLV可以在**<font color='red'>任何EIGRP数据包</font>**中使用，并传达Authentication Type和Auth Data。 
+
+<img src="./EIGRP.assets/image-20241223131017219.png" alt="image-20241223131017219" style="zoom: 67%;" />
+
+##### 3.2.1 MD5 - 0x02 
+
+​	MD5将使用Auth Type代码为0x02，Auth Data将是MD5哈希值。
+
+##### 3.2.2 SHA256 - 0x03 
+
+​	SHA2-256将使用Auth Type代码为0x03，Auth Data将是256位SHA2哈希值。
+
+#### 3.3 SEQUENCE_TYPE - 0x0003
+
+​	该TLV用于发送方告诉接收方不要接收设置了CR（条件接收）标志的数据包。 
+
+​	<font color='red'>这用于对组播和单播寻址数据包进行排序。</font>
+
+<img src="./EIGRP.assets/image-20241223131554376.png" alt="image-20241223131554376" style="zoom:67%;" />
+
+- Address Length：IPv4值为4，IPv6值为16
+- Protocol Address：
+  - 发送带有SEQUENCE TLV的HELLO的接口上的邻居地址。
+  - HELLO 数据包中列出的每个地址都是**不应**进入**条件接收模式**的邻居。
+
+#### 3.4 SOFTWARE_VERSION_TYPE - 0x0004
+
+​	TLV 版本字段用于确定 TLV 格式版本。 
+
+​	<font color='red'>使用版本1.2 TLV的路由器无法理解版本2.0 TLV，因此版本2.0路由器必须在混合网络中发送具有两种TLV格式的数据包。</font>
+
+|          Field          | Length |
+| :---------------------: | :----: |
+| Vender OS major version |   1    |
+| Vender OS minor version |   1    |
+|  EIGRP major revision   |   1    |
+|  EIGRP minor revision   |   1    |
+
+<img src="./EIGRP.assets/image-20241223133423824.png" alt="image-20241223133423824" style="zoom:67%;" />
+
+#### 3.5 MULTICAST_SEQUENCE_TYPE - 0x0005
+
+下一个组播SEQUENCE TLV。
+
+<img src="./EIGRP.assets/image-20241223133556811.png" alt="image-20241223133556811" style="zoom:67%;" />
+
+#### 3.6 PEER_INFORMATION_TYPE - 0x0006
+
+​	该 TLV 是保留的，不是本文档的一部分。
+
+#### 3.7 PEER_ TERMINATION_TYPE - 0x0007
+
+​	该 TLV 在 **<font color='red'>HELLO 数据包</font>**中使用，以通知路由器已重置邻接关系的邻居列表。 
+
+​	该TLV用在HELLO数据包中，通知邻居列表路由器已重置邻接关系。 每当路由器需要重置邻接或向邻接发出即将关闭的信号时，都会使用此功能。
+
+<img src="./EIGRP.assets/image-20241223133853329.png" alt="image-20241223133853329" style="zoom:67%;" />
+
+#### 3.8 TID_LIST_TYPE - 0x0008
+
+​	路由器支持的子拓扑标识符列表，包括基本拓扑。
+
+<img src="./EIGRP.assets/image-20241223133950044.png" alt="image-20241223133950044" style="zoom:67%;" />
+
+​	如果此信息较上一个状态发生变化，则意味着**添加**了新拓扑或**删除**了现有拓扑。<font color='red'> 在三向握手完成之前，该 TLV 将被忽略。</font>
+
+- 当接收到 TID 列表时，它将该列表与先前发送的列表进行比较。
+  - 如果发现先前不存在的 TID，则将该 TID 添加到邻居的拓扑列表中，并将现有的子拓扑发送到Peer。 
+  - 如果未找到先前列表中的 TID，则会从邻居的拓扑列表中删除该 TID，并且会从拓扑表中删除通过该子拓扑的邻居获知的所有路由。
+
+
+
+
+
+### 4 IP路由的TLV
+
+#### 4.1 内部路由TLV
 
 > 内部路由指的是EIGRP自主系统内部可以到达目的地的路径。格式如下：
 
 <img src="./EIGRP.assets/image-20241220093402875.png" alt="image-20241220093402875" style="zoom: 50%;" />
 
 - 下一跳地址：这个地址可能是、也可能不是始发路由器的地址
-- 延迟：以10us为单位表示的延迟总和。0xFFFFFFFF表示不可达路由
+
+- 延迟：以10us为单位表示的延迟总和，表示在无负载路径上传输所需的时间。0xFFFFFFFF表示不可达路由
+
 - 带宽：256×$BW_{IGRP(min)}$​。沿着路由方向的所有接口所配置的最小带宽。
-- **MTU**：沿着到达目的地的路由上所有链路中最小的最大传输单元。 `没有在度量值计算中使用`
+
+- **MTU**：到达目的地路径的最小MTU。 `没有在度量值计算中使用`
+
 - 跳数：在0x01～0xFF之间的数字，表示到达目的地的路由的跳数。
+
   - 路由器将通告与之直连网络的跳数为0跳；后续的路由器将记录并通告相对于下一跳路由器的路由。
 
 - 可靠性：一个在 0x01～0xFF 之间的数字，用来反映沿着到达目的地的路由上接口的**出站误码率**的总和，每5min通过一个指数的加权平均来计算。`0xFF表示100%的可靠链路。`
+
 - 负载：一个在 0x01～0xFF 之间的数字，用来反映沿着到达目的地的路由上接口的**出站负载**的总和，每5min通过一个指数的加权平均来计算。`0x01表示一条最小负载的链路。`
-- 保留字段：一个未使用的字段并且总是设置为 0x0000。
+
+- 内部协议标记：由网络管理员分配的、不受 EIGRP 影响的标记。 这允许网络管理员根据该值过滤其他 EIGRP 边界路由器中的路由。
+
+- 记号：EIGRP 在 TLV 中传输许多标志来指示附加路由状态信息。 这些位定义如下：
+
+  - Source Withdraw（位 0）
+    - 指示作为目标的原始源的路由器是否正在从网络中撤回路由，或者目标是否由于网络故障而丢失。
+
+  - Candidate Default(CD)(位 1)
+    - 设置为指示目的地应被视为默认路由的候选者。  
+    - EIGRP 默认路由是从所有发布的候选默认路由中选择度量值最小的。
+
+  - ACTIVE (Bit 2)
+    - 指示路由是否处于 ACTIVE 状态。
+
 - 前缀长度：指出一个地址掩码中的网络位的个数。
+
 - 目的地址：表示一个路由的目的地址。`可变长度`
 
-#### 2.2 IP外部路由的TLV
+  -  计算长度的公式取决于地址族：
 
-​	外部路由是指到达EIGRP自主系统外部的目的地址的一条路径，或者是一条通过路由重新分配注入到EIGRP域内的路由。
+    IPv4: ((Bit Count - 1) / 8) + 1
+    IPv6: (Bit Count == 128) ? 16 : ((x / 8) + 1)
+
+
+<img src="./EIGRP.assets/image-20241223135704477.png" alt="image-20241223135704477" style="zoom:67%;" />
+
+##### 4.1.1 IPv4
+
+```c
+INTERNAL_TYPE	0x0102
+EXTERNAL_TYPE	0x0103
+COMMUNITY_TYPE	0x0104
+```
+
+**1. 内部类型**
+
+<img src="./EIGRP.assets/image-20241223141556352.png" alt="image-20241223141556352" style="zoom:67%;" />
+
+**2. 外部类型**
+
+​	此信息包含创建路由的路由协议的标识、外部度量、AS 编号、是否应将其标记为 EIGRP AS 一部分的指示符以及用于在 EIGRP 进行路由过滤的网络管理员标记 AS 边界。
+
+<img src="./EIGRP.assets/image-20241223141944561.png" alt="image-20241223141944561" style="zoom:67%;" />
+
+
+
+
+
+##### 4.1.2 IPv6
+
+```
+INTERNAL_TYPE		0x0402
+EXTERNAL_TYPE		0x0403
+COMMUNITY_TYPE		0x0404
+```
+
+<img src="./EIGRP.assets/image-20241223142219343.png" alt="image-20241223142219343" style="zoom: 67%;" />
+
+<img src="./EIGRP.assets/image-20241223142259718.png" alt="image-20241223142259718" style="zoom:67%;" />
+
+### 2.2 IP外部路由的TLV
+
+​	外部路由是指到达EIGRP AS外部的目的地址的一条路径，或者是一条通过路由重新分配注入到EIGRP域内的路由。
 
 <img src="./EIGRP.assets/image-20241220095503838.png" alt="image-20241220095503838" style="zoom: 50%;" />
 
@@ -235,11 +455,35 @@
 
 ### 1. Hello包
 
+> <font color='red'>主地址发送hello包</font>
+
 用于建立邻居关系，每5s向224.0.0.10组播地址发送Hello包，确认邻居关系；抑制时间为15s；
+
+#### IPv4
+
+##### 单播
+
+直接发送给指定的邻居路由器（目标邻居的IP地址）。
+
+##### 组播
+
+发送给一个组播地址224.0.0.10
+
+#### IPv6
+
+源地址是传输接口的链路本地地址，目标地址为组播地址：FF02:0:0:0:0:0:0:A。
+
+> 不要求两个EIGRP IPv6邻居在其连接接口上共享公共前缀。  
+>
+> EIGRP IPv6将检查收到的HELLO是否包含有效的IPv6链路本地源地址。 其他 HELLO 处理将遵循常见的EIGRP检查，包括匹配AS编号和匹配K值。
+
+
 
 ### 2. Update包
 
 发送路由更新信息（发送Sequence_num）
+
+当发现新邻居时，会使用单播更新数据包向邻居发送整个路由表。
 
 ### 3. Query包
 
@@ -295,17 +539,21 @@
 
 ##### 1.1.2 Queue count 队列数
 
+> 表示多少可靠报文（Update、Query和Relay）还未得到确认，可通过ACL进行实验。
+
 ​	未收到对端ACK，Qcnt=1，收到后，Qcnt=0
 
 ##### 1.1.3 RTO 重传超时定时器
 
-​	SRTT和RTO时间是思科私有的
+​	应该是SRTT的6倍，用于何时进行重传。
+
+​	在组播发送数据包时，该数据包的单播拷贝会放进一个重传队列中排队，一旦这个组播数据包发送失败，即没有收到邻居的Ack确认，那么这个拷贝就会被再次以单播形式发送出去，而触发这个动作的时限，即等待这个Ack的事件就称为RTO，如果重传16次还没得到确认，这个邻居就宣布失效了。
 
 
 
 #### 1.1 邻居关系
 
-​	跟OSPF一样，EIGRP使用邻居的概念。在路由器之间通过非常轻量级的EIGRP Hello报文检查邻居之间的可达性，维护邻居关系。
+ 	跟OSPF一样，EIGRP使用邻居的概念。在路由器之间通过非常轻量级的EIGRP Hello报文检查邻居之间的可达性，维护邻居关系。
 
 EIGRP邻居发现，邻居参数协商以及维护邻居关系都由EIGRP Hello报文完成。
 
@@ -397,9 +645,11 @@ EIGRP要求建立邻居关系的两台路由器，下列参数需要匹配：
 
 ​	当邻居被发现时，EIGRP 协议将试图和它的邻居形成一个邻接关系。一旦邻接建立成功，路由器就可以从它们的邻居那里接收路由更新消息了。
 
+
+
 ### 通告距离（AD）
 
-> 邻居（下一跳）路由器到达目的的Metric值
+> 邻居（下一跳）路由器到达目的网络的度量值
 
 ​	或称为RD（报告距离），邻居报告到达目标网络的metric
 
@@ -417,11 +667,9 @@ EIGRP要求建立邻居关系的两台路由器，下列参数需要匹配：
 
 ​	**当前S的CD，**本地路由器到达每个目的网络的最小度量值metric就是该目的网络的可行距离
 
-​	<font color='red'>它是自上次路由从Active状态变为Passive状态以来到达目的地的最短距离，但不一定是当前最佳距离。</font>
+​	<font color='red'>它是自上次路由从Active状态变为Passive状态以来到达目的网络的最短距离，但不一定是当前最佳距离。</font>
 
 ​	可以理解为自上次目的地DUAL计算完后的已知最佳距离的历史记录。因此，FD可以与当前最佳距离一样，也可以更低。
-
-
 
 
 
@@ -433,13 +681,9 @@ EIGRP要求建立邻居关系的两台路由器，下列参数需要匹配：
 
 ### 可行后继路由器（Feasible Successor，FS）
 
-> 如果本地路由器的邻居路由器所通告的到达目的网络的距离AD < FD（满足了 FC），那么这个邻居就会成为该目的网络的一个可行后继路由器。
+> 如果本地路由器的邻居路由器所通告的到达目的网络的距离AD <  最优路由的FD（满足了 FC），那么这个邻居就会成为该目的网络的一个可行后继路由器。
 
 ​	到达目标网络的备用路由的下一跳路由器。所有的FS都会存储在EIGRP拓扑表内。
-
-
-
-
 
 <img src="./EIGRP.assets/image-20241219104857627.png" alt="image-20241219104857627" style="zoom:50%;" />
 
@@ -453,7 +697,7 @@ EIGRP要求建立邻居关系的两台路由器，下列参数需要匹配：
 
 ### 可行性条件（Feasibility Condition，FC）
 
-​	需要满足本地路由器的一个邻居路由器所通告的到达一个目的网络的距离AD是否小于本地路由器到达相同目的网络的可行距离（FD）。    **FD  >  AD**   不满足当不了FS路由器
+​	需要满足本地路由器的一个邻居路由器所通告的到达一个目的网络的距离AD是否小于本地路由器到达相同目的网络的可行距离（FD）。    **FD  >  AD**   满足该条件，才是FS路由器
 
 > FC是EIGRP确保完全无环的关键。
 >
@@ -465,8 +709,6 @@ EIGRP要求建立邻居关系的两台路由器，下列参数需要匹配：
 
 
 
-
-
 ## 如何实现快速收敛？
 
 ​	当S不再可用时，EIGRP搜索自己的拓扑表，如果有另一个FS，则不经过任何计算，直接通过另一个FS转发数据，同时该FS也就成为了S。如果FS全挂了，R1会发送请求给R4，如果R4有去往2.0网段路由，则直接发送给R1，并使用R4作为S。
@@ -475,7 +717,7 @@ EIGRP要求建立邻居关系的两台路由器，下列参数需要匹配：
 
 ## 差异变量命令（variance）
 
-该差异变量命令用来确定哪些路由在**非等价负载均衡**中是可以使用的。
+该差异变量命令用来确定哪些路由在**非等价负载均衡（最大路径数，默认为4）**中是可以使用的。
 
 Variance定义了一个倍数因子，用来表示**一条路由的度量值**和**最小代价路由**的差异程度。缺省值为1，必须是**整数**。
 
@@ -512,6 +754,10 @@ variance 5
 
 ​	借鉴TCP的4种可靠机制（确认、重传（默认最大16次）、排序、流控 （传递协议报文的流量不能超过链路带宽的50%）
 
+
+
+
+
 ### 4.扩散更新算法DUAL
 
 ​	DUAL（扩散更新算法）: 选择到每个目的网络的最小开销、loop-free的路径
@@ -530,16 +776,161 @@ variance 5
 
 
 
+
+
+#### 4.1 重新评估一条路由的FS
+
+一旦产生**输入事件时，**路由器就会重新评估一条路由的FS路由器的列表。输入事件如下：
+
+1. 直连链路的代价发生变化
+2. 直连链路的状态（up或down）发生变化
+3. 收到现有目的地的Update/Query/Reply数据包
+
+
+
+##### **4.1.1 重新评估步骤**
+
+1. 在本地路由器上执行一个本地计算，即对于所有FS，重新计算到达目的网络的距离
+
+   - 如果拥有最低的度量距离的FS和已经存在的S不同，那么FS将变成S；
+     - 如果新的度量距离小于FD，则更新FD
+     - 如果新的度量距离和已经存在的度量距离不同，那么将向所有邻居发送更新。
+
+2. 当路由器执行一个本地计算时，路由依然保持被动状态。
+
+   - 如果本地路由器在拓扑表中没有发现任何一台FS，那么会进行DUAL计算了，而且该路由的状态**切换为Active;**
+
+   > <font color='red'>DUAL计算完成和路由状态切换为Passive前，路由器不能：</font>
+   >
+   > - <font color='red'>改变路由的S</font>
+   > - <font color='red'>改变正在通告的路由的距离 AD</font>
+   > - <font color='red'>改变路由的FD</font>
+   > - <font color='red'>开始进行路由的另一个扩散计算</font>
+
+   - 如果发现了至少一台FS，那么将更新消息发送给它的所有邻居，但**路由状态依旧是Passive**
+
+
+
 #### 4.1 DUAL有限状态机 FSW
 
 <img src="./EIGRP.assets/image-20241220170444158.png" alt="image-20241220170444158" style="zoom:50%;" />
+
+> 术语：
+>
+> i：当前正在处理或更新目标路由的路由器
+>
+> j：目标节点或网络地址
+>
+> k：任意一个节点**i**的邻居
+>
+> $o_{ij}$：Query查询始发标记
+>
+> 	- 0： 在 **ACTIVE 状态** 下，计算到目标 **j** 的度量值发生了增加。
+> 	- 1：节点 **i** 发起的Query
+> 	- 2：在ACTIVE状态下， **QUERY来自S，或者到S的链路成本增加**
+> 	- 3：来自当前S的 **QUERY** 请求
+>
+> $r_{ijk}$​：REPLY 状态标志，表示每个邻居k对于目标j的REPLY回复状态
+>
+> - 1：等待REPLY
+> - 0：已收到REPLY
+>
+> $l_{ik}$​：节点 i 和邻居 k 的链路
+
+
+
+ **<font color='red'>注意：处于Active状态的路由，不会主动发送Query和Update</font>**
+
+**(1)** 如果收到来自<font color='cornflowerblue'>**非S**的Query查询</font>：   **<font color='red'>保持Passive状态</font>**
+
+​	如果**<font color='cornflowerblue'>存在FS</font>**，并且由于S不受Query的影响，因此路由保持Passive状态，并且发送Reply给**非S**。
+
+​	将 QUERY 中收到的度量值记录到拓扑表，并对其执行FC，以判断是否有需要更新的后继路径。
+
+**(3)** 收到来自**<font color='cornflowerblue'>S的Query</font>**，但**<font color='cornflowerblue'>不存在FS</font>**。  **<font color='red'>Passive = > Active (O = 3)</font>**
+
+​	目的路由进入ACTIVE 状态。 QUERY 将发送到所有非水平分割接口上的所有邻居。
+
+​	设置 QUERY flag = 3，以指示源自S的 QUERY。 为所有邻居设置 REPLY 状态标志以指示未完成的回复。
+
+
+
+**(2)** 如果直连接口状态发生变化（up或down）或度量值变化，或已收到现有目的网络的度量改变的 UPDATE 或 QUERY
+
+- 如果当前的 **S 未受影响** 或者 **有FS 作为备用，路由保持在 **PASSIVE 状态**。如果有度量值变化，路由器会更新信息并发送 **UPDATE 给邻居。 **<font color='red'>保持Passive状态</font>**
+
+**(4)** 直连链路 down 或其 cost 增加，或者已收到指标增加的<font color='red'>**更新**</font>。 
+
+- 如果没有找到FS，到目的地的路由将进入ACTIVE状态。Query将发送到所有接口上的所有邻居。**<font color='red'>Passive = > Active (O = 1)</font>**
+
+- QUERY flag = 1，用于指示当前路由器发起 QUERY。 
+- 所有邻居的 REPLY 状态标志均设置为 1，以指示未完成的回复。
+
+
+
+**(5)** 当目的地的路由处于 ACTIVE 状态并且从 **S** 接收到 **QUERY** 时，该路由仍保持 ACTIVE 状态。Active**<font color='red'>（O=0或1 => O=2）</font>**
+
+- 设置 QUERY origin flag = 2，以指示在 ACTIVE 状态下存在另一个拓扑更改。<font color='cornflowerblue'>**0 = > 2**</font>
+
+​	新的 **FS** 会被用来与当前的**S**度量值进行比较。
+
+<img src="./EIGRP.assets/image-20241220170444158.png" alt="image-20241220170444158" style="zoom:50%;" />
+
+<font color='red'>**保持Active状态**</font>
+
+**(6)** 当目的地的路由处于 ACTIVE 状态并且从**非 S** 接收到 **QUERY** 时，应向该邻居发送 REPLY。 应记录在 QUERY 中收到的度量。
+
+**(7)** 如果链路成本发生变化，或者在Active状态下从**非S**接收到度量发生变化的**<font color='cornflowerblue'>Update</font>**，则路由仍保持Active，并记录Update中的度量。
+
+**(8)** 如果在**ACTIVE状态**下收到了来自 **<font color='red'>邻居的 REPLY</font>**  或者<font color='red'> **路由器与邻居之间的链接发生故障**</font>：
+
+- 路由器记录 **该邻居Reply**。
+
+- **REPLY flag**置为 **0**，表示该邻居已回复查询。
+
+- 路由器继续保持在 **ACTIVE 状态**，但只有在 **还有其他邻居的回复未收到** 的情况下才继续等待。
+
+  
+
+**(9)和(10)** 如果到达目的地的路由处于 **ACTIVE 状态**，并且与其S之间**发生链路故障**或**成本增加**，则路由器会将此情况视为已收到来自其S的 **REPLY**。 
+
+- (9)：当路由器发起 QUERY 后（QUERY origin flag 为1）发生这种情况时，它会设置 QUERY origin flag = 0，以指示在 ACTIVE 状态下发生了另一个拓扑更改。
+- (10)：当S发起 QUERY 后（QUERY origin flag 为3）发生这种情况时，它会设置 QUERY origin flag = 2，以指示在 ACTIVE 状态下发生了另一个拓扑更改。
+
+
+
+**(11)** 如果到达目的地的路由处于 ACTIVE 状态，S所**经过的链路的开销增加**，并且从所有邻居收到最后的 REPLY，但没有FS
+
+- 该路由应保持在 ACTIVE 状态。 
+
+- Query被发送到所有邻居
+- QUERY origin flag 置为 1
+
+**(12)** 如果目的地的路由由于从S接收到Query而处于 ACTIVE 状态，并且从所有邻居接收到最后的 REPLY，<font color='cornflowerblue'>但没有FS</font>
+
+- 该路由应保持在 ACTIVE 状态。 
+
+- Query被发送到所有邻居
+- QUERY origin flag 置为 3
+
+<img src="./EIGRP.assets/image-20241220170444158.png" alt="image-20241220170444158" style="zoom:50%;" />
+
+**(13)** 如果从所有邻居收到 **REPLY**，并且通过QUERY origin flag 为3 表示是**S发起的 QUERY**，路由器会转到 **PASSIVE 状态** 并发送 **REPLY** 给旧后继。
+
+**(14)** 如果从所有邻居收到 **REPLY**，并且通过QUERY origin flag为0表示存在 **S的拓扑变化**，当满足FC时，路由会转到 **PASSIVE 状态**，无需发送 **REPLY** 给旧后继。
+
+**(15)** 如果从所有邻居收到 **REPLY**，并且是 **路由器自己发起的 QUERY** 或 **FC 未满足**，路由器会将 **FD**置为无穷大，并选择Reply的度量中的最小值作为FD，转到 **PASSIVE 状态**，如果$O_{ij}$标志指示存在来自后继者的查询，则向旧后继者发送Reply。
+
+**(16)** 如果路由在 **ACTIVE 状态** 下，并且已收到所有邻居的 **REPLY**，同时存在 **FS**，路由器会转到 **PASSIVE 状态**，并向 **后继路由器发送 REPLY**，前提是 **QUERY origin flag** 表示该 **QUERY 来自S**。
+
+
 
 <img src="./EIGRP.assets/image-20241220170913710.png" alt="image-20241220170913710" style="zoom: 50%;" />
 
 ```
 1.如果通向后继路由器的路径发生故障，又没有可行后继路由器，会发生什么情况呢？
 -- DUAL没有可行后继路由器并不代表不存在通向该网络的其它路径。它只能说明DUAL没有通向该网络的保证无环的备用路径，因此未将其它路径作为可行后继路由器加入到拓扑表中。如果拓扑表中没有可行后继路由器，DUAL会将目的路由置于Active状态，并向邻居查询，看是否存在新的后继路由器。
--- 当后继路由器不再可用而且没有可行后继路由器时，DUAL会将该路由置于主动状态。DUAL会向其它路由器发送 EIGRP查询，询问它们是否具有通向此网络的路径。其它路由器会返回EIGRP应答，告知该路由器它们是否有通向所需网络的路径。如果所有的EIGRP应答都没有通向此网络的路径，则该路由器将没有通向此网络的路由。
+-- 当后继路由器不再可用而且没有可行后继路由器时，DUAL会将该路由置于Active状态。DUAL会向其它路由器发送 EIGRP查询，询问它们是否具有通向此网络的路径。其它路由器会返回EIGRP应答，告知该路由器它们是否有通向所需网络的路径。如果所有的EIGRP应答都没有通向此网络的路径，则该路由器将没有通向此网络的路由。
 -- 如果该路由器收到了包含通向所需网络的路径的EIGRP应答，则会将首选路径作为新的后继路由器添加到路由表中。此过程比DUAL的拓扑表中具有可行后继路由器的情况费时，如果DUAL的拓扑表中有可行后继，DUAL可以将新路由快速添加到路由表中。
 ```
 
@@ -559,10 +950,11 @@ variance 5
 # 查看端口的BW和DLY
 show interface e0/0
 
-# 修改端口的缺省BW
-bandwidth <val>
-# 修改端口的DLY
-delay <val>
+int interface e0/0
+	# 修改端口的缺省BW
+	bandwidth <val>
+	# 修改端口的DLY
+	delay <val>
 ```
 
 <img src="./EIGRP.assets/image-20241220145308051.png" alt="image-20241220145308051" style="zoom: 67%;" />
@@ -581,7 +973,7 @@ delay <val>
 
 ```c
 1. 静态度量值：
-	BandWidth = 10^7/链路的最小带宽  kbps
+	BandWidth = 10^7/链路的最小带宽  kbps   
 	Delay = 路径延迟delay之和/10（以10us为单位）
 2. 动态度量值，它们会随着时间而不断变化。
     可靠性
@@ -592,7 +984,7 @@ Formula with default K values (带宽K1 = 1, 负载K2 = 0, 延迟K3 = 1, 可靠�
 	Metric = [K1 * BW + ((K2 * BW) / (256 – load)) + K3 * delay]
 
 (1)默认：
-    Metric = (Bandwidth + Delay) * 256;
+    Metric = (Bandwidth （先向下取整） + Delay) * 256;
 (2)K5>0:
 	Metric = [K1 * BW + ((K2 * BW) / (256 – load)) + K3 * delay] * [K5 / (reliability + K4)] * 256;
 ```
@@ -628,25 +1020,36 @@ Formula with default K values (带宽K1 = 1, 负载K2 = 0, 延迟K3 = 1, 可靠�
 ## 配置命令
 
 ```cmd
-router eigrp <AS_num>
-network <net-number>   # 宣告网络
-
-router eigrp 100                     #100为进程号（AS），范围1-65535
- network 192.168.12.1 0.0.0.0        #精准匹配
- network 192.168.12.0 0.0.0.255      #反掩码匹配
- network 192.168.12.0 255.255.255.0  #正掩码匹配
- network 0.0.0.0 0.0.0.0             #激活全部接口
- network 0.0.0.0 255.255.255.255     #激活全部接口
+router eigrp <AS>
+	network <net-number>   # 宣告网络
+	address-family ipv4 unicast autonomous-system 90
+	neighbor <A.B.C.D> <出接口>
+	passive-interface default   		 	# 让所有接口都不发hello
+	no passive-interface <interface_num>    # 额外让该接口发送hello建立邻居关系
+	
+router eigrp 100                        #100为进程号（AS），范围1-65535
+	network 192.168.12.1 0.0.0.0        #精准匹配
+ 	network 192.168.12.0 0.0.0.255      #反掩码匹配
+ 	network 192.168.12.0 255.255.255.0  #正掩码匹配
+ 	network 0.0.0.0 0.0.0.0             #激活全部接口
+ 	network 0.0.0.0 255.255.255.255     #激活全部接口
 
 # 更改Hello包的发送间隔
 ip hello-interval eigrp
 
+
+# 接口模式下进行手动汇总
+# -- 该设备会产生AD为5的汇总路由，指向null0，目的是为防止错误的递归查询。
+# -- 可考虑存在默认路由，且某明细路由丢失的情况下，数据包会被丢弃而不是路由到远端
+ip summary-address eigrp <AS_num> 10.1.4.0 255.255.255.0
+
+
 # show 命令
 show ip route eigrp
 show ip protocols
-show ip eigrp interfaces
-show ip eigrp neighbors [detail]
-show ip eigrp topology [all]
+show ip eigrp interfaces			   # 重要
+show ip eigrp neighbors [detail-links]  # 重要
+show ip eigrp topology [all-links]
 show ip eigrp traffic
 debug ip eigrp
 ```
