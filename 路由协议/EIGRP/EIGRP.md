@@ -1,4 +1,4 @@
-# EIGRP
+#  EIGRP
 
 对比RIPv2
 
@@ -49,11 +49,15 @@
 
 ### Active
 
-> 处于Active状态的路由被视为不可用，并且该路由器必须与其邻居协商来搜索新的无环总成本最小路径。
+> 处于Active状态的路由被视为不可用。
+>
+> 由于**提供当前最低成本路径的所有邻居**<font color='red'>**不满足FC**</font>的任何事件 => 触发Dual本地计算。
 
-​	在Active状态下，路由器与其邻居协调，主动参与重新计算成本最低的无环路径。每次检测到拓扑改变时，都会重新评估状态，并可能更改状态。`拓扑更改：指任何邻居添加、更改或从EIGRP拓扑表删除到目的地的CD的多种事件`
+​	在Active状态下，路由器必须与其邻居协调，主动参与重新计算成本最低的无环路径。每次检测到拓扑改变时，都会重新评估状态，并可能更改状态。`拓扑更改：指任何邻居添加、更改或从EIGRP拓扑表删除到目的地的CD的多种事件`
 
-​	**如果路径不满足FC，该路由就会处于Active状态**，并相所有邻居发送请求，以寻找新的无环路径。
+​	**如果路径不满足FC，该路由就会处于Active状态**，并相所有邻居发送Query，以寻找新的无环路径。
+
+
 
 **<font color='red'>注意：如果未通过FC的邻居提供了最低成本路径，则认为该路由处于 ACTIVE 状态，因此不能保证该路径无环路。</font>**
 
@@ -68,6 +72,14 @@
 <font color='red'>注意：</font><font color='red'>如果总成本最小的路径不是由S提供的，则该路由处于Active状态，需要重新计算。</font>
 
 >  虽然这些邻居保证提供无环路路径，但该路径可能不是最短的可用路径。
+
+
+
+### Stuck In Active（SIA）
+
+​	在本地路由器上保持Active状态的路由超过预定义时间（cisco为3分钟）
+
+
 
 
 
@@ -143,9 +155,13 @@ EIGRP IPv6 Service Family	  16386
   >
   > RS-Flag (0x04)：在重启期间，HELLO和UPDATE数据包中设置重启标志。 
   >
-  > ​				路由器查看RSFlag以检测邻居是否正在重新启动。如果相邻路由器检测到设置了RS-Flag，它将维持邻接关				系，并在其UPDATE数据包中设置RS-Flag以指示它正在进行软重启。  
+  > ​				路由器查看RSFlag以检测邻居是否正在重新启动。如果路由器检测到设置了RS-Flag，它将维持邻接关				系，并在其UPDATE数据包中设置RS-Flag以指示它正在进行软重启。  
   >
-  > EOT-Flag (0x08)：End-of-Table 标志着与邻居的启动过程的结束。 如果设置了该标志，则表明邻居已完成发送所有 				UPDATE。 此时，路由器将删除在重启事件之前从邻居获知的所有陈旧路由。 陈旧路由是指在重新启动之前				存在且未被邻居通过 UPDATE 刷新的任何路由。
+  > EOT-Flag (0x08)：End-of-Table 标志着与邻居的启动过程的结束。 如果设置了该标志，则表明邻居已完成发送所有 				UPDATE。 
+  >
+  > ​				此时，路由器将删除在重启事件之前从邻居获知的所有陈旧路由。
+  >
+  > ​				陈旧路由是指在重新启动之前存在且未被邻居通过 UPDATE 刷新的任何路由。
 
 - Sequence Number：传输的每个数据包都将具有一个32位序列号，该序列号对于发送路由器而言是唯一的。
 
@@ -178,7 +194,9 @@ EIGRP IPv6 Service Family	  16386
 
 类型字段的结构分为Type high以及Type low。
 
-Type high：定义协议分类的1个八位字节
+Type high：定义**协议分类** ; 
+
+Type low：定义TLV操作码，见section 3
 
 |   Protocol    |  ID  | Version |
 | :-----------: | :--: | :-----: |
@@ -200,7 +218,7 @@ Value：一个多八位字节字段，包含 TLV 的有效载荷
 
 
 
-### 3. EIGRP Generic TLV Definitions
+### 3. 一般的TLV类型
 
 | Type                    | Ver 1.2 | Ver 2.0 |
 | ----------------------- | ------- | ------- |
@@ -215,9 +233,9 @@ Value：一个多八位字节字段，包含 TLV 的有效载荷
 
 #### 3.1 PARAMETER_TYPE - 0x0001
 
-​	该TLV在**HELLO数据包**中用于传达EIGR 度量系数值： **101000**
+​	该TLV在**HELLO数据包**中用于传达EIGRP 度量系数值： **101000**
 
-​		表示为“K 值”以及Hold Time值。 当发现邻居时，此 TLV 还会用在**初始UPDATE数据包**中。
+​	表示为“K 值”以及Hold Time值。 当发现邻居时，此 TLV 还会用在**初始UPDATE数据包**中。
 
 <img src="./EIGRP.assets/image-20241223130450909.png" alt="image-20241223130450909" style="zoom:67%;" />
 
@@ -237,18 +255,22 @@ Value：一个多八位字节字段，包含 TLV 的有效载荷
 
 ​	SHA2-256将使用Auth Type代码为0x03，Auth Data将是256位SHA2哈希值。
 
+
+
 #### 3.3 SEQUENCE_TYPE - 0x0003
 
-​	该TLV用于发送方告诉接收方不要接收设置了CR（条件接收）标志的数据包。 
+​	该TLV用于发送方告诉接收方不要接收设置了CR-Flag（条件接收）的数据包。  
 
-​	<font color='red'>这用于对组播和单播寻址数据包进行排序。</font>
+​	<font color='red'>这用于对组播和单播数据包进行排序。</font>就是如果路由器进入CR模式，直接收带有CF-Flag的数据包，而未进入CR模式的路由器将对该包进行丢弃。
 
 <img src="./EIGRP.assets/image-20241223131554376.png" alt="image-20241223131554376" style="zoom:67%;" />
 
 - Address Length：IPv4值为4，IPv6值为16
 - Protocol Address：
   - 发送带有SEQUENCE TLV的HELLO的接口上的邻居地址。
-  - HELLO 数据包中列出的每个地址都是**不应**进入**条件接收模式**的邻居。
+  - HELLO  TLV数据包中列出的每个地址都是**不应**进入**条件接收模式**的邻居。
+  
+  
 
 #### 3.4 SOFTWARE_VERSION_TYPE - 0x0004
 
@@ -265,31 +287,41 @@ Value：一个多八位字节字段，包含 TLV 的有效载荷
 
 <img src="./EIGRP.assets/image-20241223133423824.png" alt="image-20241223133423824" style="zoom:67%;" />
 
+
+
 #### 3.5 MULTICAST_SEQUENCE_TYPE - 0x0005
 
-下一个组播SEQUENCE TLV。
+下一个组播的SEQUENCE TLV。
 
 <img src="./EIGRP.assets/image-20241223133556811.png" alt="image-20241223133556811" style="zoom:67%;" />
+
+
 
 #### 3.6 PEER_INFORMATION_TYPE - 0x0006
 
 ​	该 TLV 是保留的，不是本文档的一部分。
 
+
+
 #### 3.7 PEER_ TERMINATION_TYPE - 0x0007
 
 ​	该 TLV 在 **<font color='red'>HELLO 数据包</font>**中使用，以通知路由器已重置邻接关系的邻居列表。 
 
-​	该TLV用在HELLO数据包中，通知邻居列表路由器已重置邻接关系。 每当路由器需要重置邻接或向邻接发出即将关闭的信号时，都会使用此功能。
+​	该TLV用在HELLO数据包中，通知邻居列表路由器重置邻接关系。 每当路由器需要重置邻接或向邻接发出即将关闭的信号时，都会使用此功能。
 
 <img src="./EIGRP.assets/image-20241223133853329.png" alt="image-20241223133853329" style="zoom:67%;" />
+
+
 
 #### 3.8 TID_LIST_TYPE - 0x0008
 
 ​	路由器支持的子拓扑标识符列表，包括基本拓扑。
 
+​	Topology Identification List：包含一个或多个拓扑标识符（TID）
+
 <img src="./EIGRP.assets/image-20241223133950044.png" alt="image-20241223133950044" style="zoom:67%;" />
 
-​	如果此信息较上一个状态发生变化，则意味着**添加**了新拓扑或**删除**了现有拓扑。<font color='red'> 在三向握手完成之前，该 TLV 将被忽略。</font>
+​	如果此信息较上一个状态发生变化，则意味着**添加**了新拓扑或**删除**了现有拓扑。<font color='red'> 在三次握手完成之前，该 TLV 将被忽略。</font>
 
 - 当接收到 TID 列表时，它将该列表与先前发送的列表进行比较。
   - 如果发现先前不存在的 TID，则将该 TID 添加到邻居的拓扑列表中，并将现有的子拓扑发送到Peer。 
@@ -325,7 +357,7 @@ Value：一个多八位字节字段，包含 TLV 的有效载荷
 
 - 内部协议标记：由网络管理员分配的、不受 EIGRP 影响的标记。 这允许网络管理员根据该值过滤其他 EIGRP 边界路由器中的路由。
 
-- 记号：EIGRP 在 TLV 中传输许多标志来指示附加路由状态信息。 这些位定义如下：
+- flags：EIGRP 在 TLV 中传输许多标志来指示附加路由状态信息。 这些位定义如下：
 
   - Source Withdraw（位 0）
     - 指示作为目标的原始源的路由器是否正在从网络中撤回路由，或者目标是否由于网络故障而丢失。
@@ -347,7 +379,7 @@ Value：一个多八位字节字段，包含 TLV 的有效载荷
     IPv6: (Bit Count == 128) ? 16 : ((x / 8) + 1)
 
 
-<img src="./EIGRP.assets/image-20241223135704477.png" alt="image-20241223135704477" style="zoom:67%;" />
+
 
 ##### 4.1.1 IPv4
 
@@ -361,15 +393,21 @@ COMMUNITY_TYPE	0x0104
 
 <img src="./EIGRP.assets/image-20241223141556352.png" alt="image-20241223141556352" style="zoom:67%;" />
 
+<img src="./EIGRP.assets/image-20241223135704477.png" alt="image-20241223135704477" style="zoom:67%;" />
+
+<img src="./EIGRP.assets/image-20241226150647634.png" alt="image-20241226150647634" style="zoom:67%;" />
+
 **2. 外部类型**
 
 ​	此信息包含创建路由的路由协议的标识、外部度量、AS 编号、是否应将其标记为 EIGRP AS 一部分的指示符以及用于在 EIGRP 进行路由过滤的网络管理员标记 AS 边界。
 
 <img src="./EIGRP.assets/image-20241223141944561.png" alt="image-20241223141944561" style="zoom:67%;" />
 
+<img src="./EIGRP.assets/image-20241226150220173.png" alt="image-20241226150220173" style="zoom: 67%;" />
 
+<img src="./EIGRP.assets/image-20241223135704477.png" alt="image-20241223135704477" style="zoom:67%;" />
 
-
+<img src="./EIGRP.assets/image-20241226150647634.png" alt="image-20241226150647634" style="zoom:67%;" />
 
 ##### 4.1.2 IPv6
 
@@ -381,13 +419,17 @@ COMMUNITY_TYPE		0x0404
 
 <img src="./EIGRP.assets/image-20241223142219343.png" alt="image-20241223142219343" style="zoom: 67%;" />
 
-<img src="./EIGRP.assets/image-20241223142259718.png" alt="image-20241223142259718" style="zoom:67%;" />
+<img src="./EIGRP.assets/image-20241223135704477.png" alt="image-20241223135704477" style="zoom:67%;" />
+
+<img src="./EIGRP.assets/image-20241226150647634.png" alt="image-20241226150647634" style="zoom:67%;" />
 
 ### 2.2 IP外部路由的TLV
 
 ​	外部路由是指到达EIGRP AS外部的目的地址的一条路径，或者是一条通过路由重新分配注入到EIGRP域内的路由。
 
 <img src="./EIGRP.assets/image-20241220095503838.png" alt="image-20241220095503838" style="zoom: 50%;" />
+
+
 
 - 下一跳地址：路由的下一跳 IP 地址
 - 源路由器：一个IP地址，或重分配外部路由到EIGRP自主系统的路由器ID
@@ -427,6 +469,10 @@ COMMUNITY_TYPE		0x0404
 <img src="./EIGRP.assets/image-20241220104744170.png" alt="image-20241220104744170" style="zoom:67%;" />
 
 #### Ack报文
+
+> 如果没有收到数据包的确认，需要重传数据包，重传最多持续5秒，最大重传次数为16次，如果之后还未收到Ack，将删除邻居关系。
+>
+> 不会确认收到的重复数据包
 
 1. 对Hello阶段Update包的Ack
 
@@ -485,15 +531,37 @@ COMMUNITY_TYPE		0x0404
 
 当发现新邻居时，会使用单播更新数据包向邻居发送整个路由表。
 
+> 当metric值发生变化或者添加了目的网络等时发送
+
+
+
 ### 3. Query包
 
 当路由信息丢失并没有备用路由时，使用Query数据包向邻居查询，邻居必须回复确认。
 
 > 当FC失败时发送，可能是由于目的地变得无法到达或者度量增加到大于其当前FD值等原因而发生。
 
+<font color='cornflowerblue'>将Delay设置为最大值</font>，来对无限度量进行编码。
+
+
+
 ### 4. Reply包
 
 对邻居Query数据包的回复，也需要邻居回复确认。
+
+> 响应Query或SIA-Query包
+
+#### 4.1 SIA-Query包
+
+当在一半的SIA间隔（90s）内未收到Reply包时发送
+
+> 收到 SIA-QUERY 数据包后，应首先发送 ACK，然后继续处理 SIA-QUERY 信息。 
+
+#### 4.2 SIA-Reply包
+
+响应 SIA-Query 包，仅用于指示路由仍处于 Active 状态。
+
+
 
 ### 5. ACK包
 
@@ -709,6 +777,34 @@ EIGRP要求建立邻居关系的两台路由器，下列参数需要匹配：
 
 
 
+### SDAG（Successor-Directed Acyclic Graph）
+
+​	SDAG 后继有向无环图。
+
+​	对于特定目的地，由拓扑中各个路由器的路由表内容定义的图，使得该图的节点是路由器本身，并且当且仅当路由器 Y 是路由器 X 的后继者时，存在从路由器 X 到路由器 Y 的有向边 。 网络收敛后，在没有拓扑变化的情况下，SDAG是一棵树。
+
+
+
+### Topology Change / Topology-Change Event
+
+​	任何引起CD的改变事件，如邻居的添加、修改或删除，都会导致拓扑产生变化。
+
+​	举个例子，检测到链路成本发生变化，接收来自邻居RD更新的任何 EIGRP 消息，
+
+
+
+### Topology Identifier（TID）
+
+​	用于标记属于特定子拓扑前缀的标识符。
+
+
+
+### Topology Table
+
+​	用于存储有关每个已知目的网络的信息，包括但不限于网络前缀/前缀长度、通告目的地的每个邻居的 FD、RD、相应邻居的 CD 以及路由状态。
+
+
+
 ## 如何实现快速收敛？
 
 ​	当S不再可用时，EIGRP搜索自己的拓扑表，如果有另一个FS，则不经过任何计算，直接通过另一个FS转发数据，同时该FS也就成为了S。如果FS全挂了，R1会发送请求给R4，如果R4有去往2.0网段路由，则直接发送给R1，并使用R4作为S。
@@ -802,10 +898,12 @@ variance 5
 
    > <font color='red'>DUAL计算完成和路由状态切换为Passive前，路由器不能：</font>
    >
-   > - <font color='red'>改变路由的S</font>
-   > - <font color='red'>改变正在通告的路由的距离 AD</font>
-   > - <font color='red'>改变路由的FD</font>
+   > - <font color='red'>更改路由的后继S</font>
+   > - <font color='red'>更改路由的通告距离 AD</font>
+   > - <font color='red'>更改路由的可行距离 FD</font>
    > - <font color='red'>开始进行路由的另一个扩散计算</font>
+   >
+   > 在 Active 期间收到的有关此路由的更新信息仅反映在 CD 中， 对后继S和FD、AD的任何更新都会被推迟
 
    - 如果发现了至少一台FS，那么将更新消息发送给它的所有邻居，但**路由状态依旧是Passive**
 
@@ -813,7 +911,7 @@ variance 5
 
 #### 4.1 DUAL有限状态机 FSW
 
-<img src="./EIGRP.assets/image-20241220170444158.png" alt="image-20241220170444158" style="zoom:50%;" />
+<img src="./EIGRP.assets/image-20241220170444158.png" alt="image-20241220170444158" style="zoom: 67%;" />
 
 > 术语：
 >
@@ -843,23 +941,23 @@ variance 5
 
 **(1)** 如果收到来自<font color='cornflowerblue'>**非S**的Query查询</font>：   **<font color='red'>保持Passive状态</font>**
 
-​	如果**<font color='cornflowerblue'>存在FS</font>**，并且由于S不受Query的影响，因此路由保持Passive状态，并且发送Reply给**非S**。
+​	如果**<font color='cornflowerblue'>存在FS</font>**，路由保持Passive状态，并且发送Reply给**非S**。
 
 ​	将 QUERY 中收到的度量值记录到拓扑表，并对其执行FC，以判断是否有需要更新的后继路径。
 
 **(3)** 收到来自**<font color='cornflowerblue'>S的Query</font>**，但**<font color='cornflowerblue'>不存在FS</font>**。  **<font color='red'>Passive = > Active (O = 3)</font>**
 
-​	目的路由进入ACTIVE 状态。 QUERY 将发送到所有非水平分割接口上的所有邻居。
+​	路由进入ACTIVE 状态。 QUERY 将发送到所有非水平分割接口上的所有邻居。
 
-​	设置 QUERY flag = 3，以指示源自S的 QUERY。 为所有邻居设置 REPLY 状态标志以指示未完成的回复。
+​	设置 QUERY_origin_flag = 3，以指示源自S的 QUERY。 为所有邻居设置 REPLY 状态标志以指示未完成的回复。
 
 
 
-**(2)** 如果直连接口状态发生变化（up或down）或度量值变化，或已收到现有目的网络的度量改变的 UPDATE 或 QUERY
+**(2)** 如果直连接口的状态发生变化（up、down或metric改变），或已收到现有目的网络的度量改变的 UPDATE 或 QUERY
 
-- 如果当前的 **S 未受影响** 或者 **有FS 作为备用，路由保持在 **PASSIVE 状态**。如果有度量值变化，路由器会更新信息并发送 **UPDATE 给邻居。 **<font color='red'>保持Passive状态</font>**
+- 如果当前的 **S 不受此变化影响** 或者 **此路由不再可达，但有FS 作为备用，路由保持在 **PASSIVE 状态**。如果有度量值变化，路由器会更新信息并发送 **UPDATE 给邻居。 **<font color='red'>保持Passive状态</font>**
 
-**(4)** 直连链路 down 或其 cost 增加，或者已收到指标增加的<font color='red'>**更新**</font>。 
+**(4)** 直连链路 down 或其 cost 增加，或者已收到**metric**增加的<font color='red'>**Update**</font>。 
 
 - 如果没有找到FS，到目的地的路由将进入ACTIVE状态。Query将发送到所有接口上的所有邻居。**<font color='red'>Passive = > Active (O = 1)</font>**
 
@@ -868,17 +966,17 @@ variance 5
 
 
 
-**(5)** 当目的地的路由处于 ACTIVE 状态并且从 **S** 接收到 **QUERY** 时，该路由仍保持 ACTIVE 状态。Active**<font color='red'>（O=0或1 => O=2）</font>**
+**(5)** 当路由处于 ACTIVE 状态并且从 **S** 接收到 **QUERY** 时，该路由仍保持 ACTIVE 状态。<font color='red'>**保持Active**</font>**<font color='red'>（O=0或1 => O=2）</font>**
 
-- 设置 QUERY origin flag = 2，以指示在 ACTIVE 状态下存在另一个拓扑更改。<font color='cornflowerblue'>**0 = > 2**</font>
+- 设置 QUERY_origin_flag = 2，以指示在 ACTIVE 状态下存在另一个拓扑更改。<font color='cornflowerblue'>**0 = > 2**</font>
 
-​	新的 **FS** 会被用来与当前的**S**度量值进行比较。
+​	新的 **FS** 会被用来与当前**S**的度量值进行比较。
 
 <img src="./EIGRP.assets/image-20241220170444158.png" alt="image-20241220170444158" style="zoom:50%;" />
 
 <font color='red'>**保持Active状态**</font>
 
-**(6)** 当目的地的路由处于 ACTIVE 状态并且从**非 S** 接收到 **QUERY** 时，应向该邻居发送 REPLY。 应记录在 QUERY 中收到的度量。
+**(6)** 当路由处于 ACTIVE 状态并且从**非 S** 接收到 **QUERY** 时，应向该邻居发送 REPLY。 应记录在 QUERY 中收到的度量。
 
 **(7)** 如果链路成本发生变化，或者在Active状态下从**非S**接收到度量发生变化的**<font color='cornflowerblue'>Update</font>**，则路由仍保持Active，并记录Update中的度量。
 
@@ -886,27 +984,27 @@ variance 5
 
 - 路由器记录 **该邻居Reply**。
 
-- **REPLY flag**置为 **0**，表示该邻居已回复查询。
+- **REPLY flag**置为 **0**，表示该邻居已回复Query。
 
-- 路由器继续保持在 **ACTIVE 状态**，但只有在 **还有其他邻居的回复未收到** 的情况下才继续等待。
+- 路由器继续保持在 **ACTIVE 状态**，但只有在 **还有其他邻居的回复未收到** 的情况下才继续保持Active。
 
   
 
-**(9)和(10)** 如果到达目的地的路由处于 **ACTIVE 状态**，并且与其S之间**发生链路故障**或**成本增加**，则路由器会将此情况视为已收到来自其S的 **REPLY**。 
+**(9)和(10)** 如果路由处于 **ACTIVE 状态**，并且与其S之间**发生链路故障**或**成本增加**，则路由器会将此情况视为已收到来自其S的 **REPLY**。 
 
 - (9)：当路由器发起 QUERY 后（QUERY origin flag 为1）发生这种情况时，它会设置 QUERY origin flag = 0，以指示在 ACTIVE 状态下发生了另一个拓扑更改。
-- (10)：当S发起 QUERY 后（QUERY origin flag 为3）发生这种情况时，它会设置 QUERY origin flag = 2，以指示在 ACTIVE 状态下发生了另一个拓扑更改。
+- (10)：当转发 S发起的 QUERY 后（QUERY origin flag 为3）发生这种情况时，它会设置 QUERY origin flag = 2，以指示在 ACTIVE 状态下发生了另一个拓扑更改。
 
 
 
-**(11)** 如果到达目的地的路由处于 ACTIVE 状态，S所**经过的链路的开销增加**，并且从所有邻居收到最后的 REPLY，但没有FS
+**(11)** 如果路由处于 ACTIVE 状态，S所**经过的链路的开销增加**，并且从所有邻居收到最后的 REPLY，但没有FS
 
 - 该路由应保持在 ACTIVE 状态。 
 
 - Query被发送到所有邻居
 - QUERY origin flag 置为 1
 
-**(12)** 如果目的地的路由由于从S接收到Query而处于 ACTIVE 状态，并且从所有邻居接收到最后的 REPLY，<font color='cornflowerblue'>但没有FS</font>
+**(12)** 如果路由由于从S接收到Query而处于 ACTIVE 状态，并且从所有邻居接收到最后的 REPLY，<font color='cornflowerblue'>但没有FS</font>
 
 - 该路由应保持在 ACTIVE 状态。 
 
@@ -982,7 +1080,11 @@ int interface e0/0
 
 Formula with default K values (带宽K1 = 1, 负载K2 = 0, 延迟K3 = 1, 可靠性K4 = 0, MTUK5 = 0): 
 	Metric = [K1 * BW + ((K2 * BW) / (256 – load)) + K3 * delay]
-
+        
+K6：宽泛指标 用来反映更高的聚合指标。抖动和能量。
+    抖动：最长和最短数据包传输之间的间隔 us
+    
+        
 (1)默认：
     Metric = (Bandwidth （先向下取整） + Delay) * 256;
 (2)K5>0:
@@ -994,6 +1096,40 @@ Formula with default K values (带宽K1 = 1, 负载K2 = 0, 延迟K3 = 1, 可靠�
 > 2）延时（Delay）取数据传递方向出向接口**延时之和**
 
 <img src="./EIGRP.assets/image-20241219104021755.png" alt="image-20241219104021755" style="zoom:50%;" />
+
+- **吞吐量计算**
+
+```c
+EIGRP_BANDWIDTH			10,000,000
+EIGRP_DELAY_PICO		1,000,000
+EIGRP_INACCESSIBLE		0xFFFFFFFFFFFFFFFFLL
+EIGRP_MAX_HOPS			100
+EIGRP_CLASSIC_SCALE		256
+EIGRP_WIDE_SCALE		65536
+    
+// 1. 不考虑拥塞的影响（从接口转换 Max-Throughput 值）
+Max-Throughput = K1 *（10^7 * EIGRP_WIDE_SCALE）/ Interface Bandwidth (kbps)
+    
+// 2. 如果使用K2，则将使用拥塞效果作为接口报告的负载衡量标准，通过根据以下公式调整最大吞吐量来模拟“可用吞吐量”：
+//    当负载增加超过 90% 时，K2 对指标的影响最大。
+Net-Throughput = Max-Throughput + ( K2 * Max-Throughput ) / (256 - LOAD)
+```
+
+- **延迟计算**
+
+```c
+// 从接口传输一个数据包所需的时间。这个时间必须以皮秒（picoseconds，10⁻¹²秒）为单位。
+Latency = K3 * ( Delay * EIGRP_WIDE_SCALE ) / EIGRP_DELAY_PICO
+```
+
+- **综合计算**
+
+```c
+metric = [(K1 * Net-Throughput) + Latency ) + (K6 * ExtAttr)] * K5 / (K4+Rel)
+    
+// 默认情况下，EIGRP 使用的路径选择方案是吞吐量和延迟的组合，其中选择是路径上所有链路的总延迟和最小吞吐量的乘积：
+metric = (K1 * min(Throughput)) + (K3 * sum(Latency)) }
+```
 
 
 
