@@ -1347,6 +1347,8 @@ void eigrp_nbr_add(struct EIGRP_INTF *intf, struct EIGRP_NBR *nbr, enum NBRCHANG
 
 4. 如果邻居是新发现的，创建hold_time定时器(开启)以及RTO重传定时器
 
+   **<font color='red'>构造Update Init报文并发送整个拓扑表信息</font>**
+
    ```c
    if (NBR_DISCOVERED == nbr->nbr_source)
    {
@@ -1366,7 +1368,8 @@ void eigrp_nbr_add(struct EIGRP_INTF *intf, struct EIGRP_NBR *nbr, enum NBRCHANG
            3000|TIMER_UNIT_10MSEC, \
            nbr->nbr_rto|TIMER_UNIT_10MSEC,\
            (void *)nbr, EIGRP_FALSE);
-   
+   	
+       
        eigrp_send_startup(nbr);
    }
    ```
