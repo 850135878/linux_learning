@@ -550,7 +550,7 @@ if (nbr && EIGRP_HELLO != hdr->opcode && 0 != hdr->ack)
 }	
 ```
 
-5. 如果收到了历史重复的可靠报文，需要检查当前nbr的可靠报文的发送队列头元素与该报文的序列号是否相同，如果不相同则不做任何操作；否则，执行eigrp_rx_ack检查完的后部分操作。
+5. 如果收到了历史重复的可靠报文，需要检查当前nbr的可靠报文的发送队列头元素与该报文的Ack号是否相同，如果不相同则不做任何操作；否则，执行eigrp_rx_ack检查完的后部分操作。
 
    之后，需要发送此历史报文的Ack内容
 
@@ -688,6 +688,8 @@ default:
 ###### eigrp_rx_ack
 
 > 此函数主要处理接收到的ACK包： Hello(Ack)、Update(Ack)
+
+> 1. eigrp_nbr_delete中调用
 
 ```c
 void eigrp_rx_ack(struct EIGRP_NBR *nbr, uint32 ack);
@@ -894,15 +896,726 @@ static void eigrp_rx_hello(struct EIGRP_TLV *tlv, struct EIGRP_NBR *newnbr, stru
 
    
 
+### 添加/删除邻居的相关操作
+
+#### eigrp_nbr_add
+
+> 当创建”直连“邻居和邻居发现时，调用此函数
+
+```c
+void eigrp_nbr_add(struct EIGRP_INTF *intf, struct EIGRP_NBR *nbr, enum NBRCHANGE_REASON reason);
+```
+
+<img src="./EIGRP_code.assets/image-20250106094652054.png" alt="image-20250106094652054" style="zoom:67%;" />
+
+1. 检查nbr参数是否为NULL
+
+2. 如果reason是NBR_DISCOVERED邻居发现的，端口的nbr数量加一，并更新端口eigrp报文的占用带宽率
+
+   ```c
+   assert(nbr);
+   if (NBR_DISCOVERED == nbr->nbr_source)
+   {
+       intf->nbrs++;
+       eigrp_bw_percent_default(intf->ref_if->if_index);
+   }
+   ```
+
+3. 初始化nbr的字段，如果是新发现邻居，则开启hold_time定时器，创建但不开启RTO定时器，发送Update报文
+
+   ```c
+   time(&nbr->nbr_ctime);
+   time(&nbr->nbr_rtime);
+   nbr->nbr_sequence = 0;
+   nbr->nbr_retrans = nbr->nbr_retries = 0;
+   nbr->nbr_srtt = 0;
+   nbr->nbr_last_rto = 0;
+   nbr->nbr_if_conditional_rcv = 0;
+   nbr->nbr_nms = 0;
+   nbr->nbr_flags = NBRF_WAIT_INIT;
+   nbr->nbr_rto = NEW_RTO(nbr);
+   
+   EIGRP_INIT_QUE(&nbr->nbr_tx_q);
+   
+   EIGRP_INIT_QUE(&nbr->nbr_unreply_list_list);
+   
+   if (NBR_DISCOVERED == nbr->nbr_source)
+   {
+       /* create hold timer and rto timer */
+       nbr->hold_timer = task_timer_create(\
+           "EIGRP_HOLD", \
+           tq_hold_entry, \
+           0,\
+           nbr->nbr_hold_time, \
+           nbr->nbr_hold_time,\
+           (void *)nbr, EIGRP_TRUE);
+   
+       nbr->nbr_rto_timer = task_timer_create(\
+           "EIGRP_RTO", \
+           tq_rto_entry, \
+           0,\
+           3000|TIMER_UNIT_10MSEC, \
+           nbr->nbr_rto|TIMER_UNIT_10MSEC,\
+           (void *)nbr, EIGRP_FALSE);
+   	
+       // 发送Update报文
+       eigrp_send_startup(nbr);
+   }
+   ```
 
 
 
+##### eigrp_send_startup
+
+```c
+int eigrp_send_startup(struct EIGRP_NBR *nbr);
+```
+
+![image-20250106101222617](./EIGRP_code.assets/image-20250106101222617.png)
+
+1. 检查nbr是否为NULL
+
+2. 检查nbr->inft->ref_if是否是passive端口
+
+   ```C
+   assert(nbr);
+   
+   intf = nbr->intf;
+   eigrp = intf->eigrp;
+   
+   /* when interface is passive */
+   if (intf->ref_if->if_passive)
+       return EIGRP_FAIL;
+   ```
+
+3. 创建并初始化一个EIGRP_TX_Q_ELEM类型对象
+
+   ```c
+   tx_elm = (struct EIGRP_TX_Q_ELEM *)eigrp_mem_malloc(sizeof(struct EIGRP_TX_Q_ELEM), MTYPE_EIGRP_EIGRP_TX_Q_ELEM);
+   
+   if (NULL == tx_elm)
+       return EIGRP_FAIL;
+   
+   EIGRP_SET_ZERO(tx_elm, sizeof(struct EIGRP_TX_Q_ELEM));
+   
+   tx_elm->opcode = EIGRP_UPDATE;
+   tx_elm->nbr = nbr;
+   tx_elm->startup = EIGRP_TRUE;
+   tx_elm->routes = 0;
+   BIT_SET(tx_elm->flags, INIT_BIT);
+   ```
+
+<img src="./EIGRP_code.assets/image-20250106102305858.png" alt="image-20250106102305858" style="zoom: 67%;" />
+
+4. 遍历topology表，获取(struct TOPOLOGY_ENTRY *)node->info的entry
+
+   - 如果entry不为NULL，且state不为Active，
+   - 检查该entry是否能通过水平分割检查
+   - 将entry中的信息填充至EIGRP_TX_Q_ELEM对象中
+
+   ```c
+   for (rn = route_top(eigrp->topology); rn; rn = route_next(rn)){
+   	entry = (struct TOPOLOGY_ENTRY *)rn->info;
+       if (NULL == entry)
+           continue;
+       if (ENTRY_ACTIVE== entry->state)
+           continue;
+   
+       /* if the entry is filter by split horizon */
+       if (eigrp_split_horizon(entry, intf))
+           continue;
+       
+       memcpy(&(tx_elm->route[tx_elm->routes].p), &(rn->p), sizeof(struct prefix));
+       tx_elm->route[tx_elm->routes].serno = entry->serno;
+       tx_elm->routes++;
+       
+       // 超出了，则添加到第二个Update数据包中
+       if (tx_elm->routes >= PKT_MAXROUTETLV)
+       {
+           tx_elm->sequence = eigrp->max_sequence++;
+           tx_elm->opcode = EIGRP_UPDATE;
+           BIT_SET(nbr->nbr_flags, NBRF_WAIT_INITACK);
+           eigrp_insert_nbr_txq(nbr, tx_elm, STARTUP_INIT_RTO);
+   
+           if (max_seq < tx_elm->sequence)
+               max_seq = tx_elm->sequence;
+           if (min_seq > tx_elm->sequence)
+               min_seq = tx_elm->sequence;
+   
+           /* there is duplicate copy in function of eigrp_insert_nbr_txq */
+           EIGRP_SET_ZERO(tx_elm, sizeof(struct EIGRP_TX_Q_ELEM));
+   
+           tx_elm->opcode = EIGRP_UPDATE;
+           tx_elm->nbr = nbr;
+           tx_elm->startup = EIGRP_TRUE;
+           tx_elm->routes = 0;
+           tx_elm_startup = EIGRP_TRUE;
+       }
+   }
+   ```
+
+5. 如果填充入的路由数 > 0，
+
+   ```c
+   if (0 < tx_elm->routes)
+   {
+       tx_elm->sequence = eigrp->max_sequence++;
+       tx_elm->opcode = EIGRP_UPDATE;
+       BIT_SET(nbr->nbr_flags, NBRF_WAIT_INITACK);
+       eigrp_insert_nbr_txq(nbr, tx_elm, STARTUP_INIT_RTO);
+       if (max_seq < tx_elm->sequence)
+           max_seq = tx_elm->sequence;
+       if (min_seq > tx_elm->sequence)
+           min_seq = tx_elm->sequence;
+   }
+   else { //路由数不存在，则填充空的Update包
+       if (!BIT_TEST(nbr->nbr_flags, NBRF_WAIT_INITACK))
+       {
+           /* send a blank init update */
+           tx_elm->sequence = eigrp->max_sequence++;
+           tx_elm->opcode = EIGRP_UPDATE;
+           BIT_SET(nbr->nbr_flags, NBRF_WAIT_INITACK);
+           eigrp_insert_nbr_txq(nbr, tx_elm, STARTUP_INIT_RTO);
+           if (max_seq < tx_elm->sequence)
+               max_seq = tx_elm->sequence;
+           if (min_seq > tx_elm->sequence)
+               min_seq = tx_elm->sequence;
+       }
+   }
+   
+   eigrp_mem_free(tx_elm, MTYPE_EIGRP_EIGRP_TX_Q_ELEM);
+   ```
+
+###### eigrp_insert_nbr_txq
+
+```c
+void eigrp_insert_nbr_txq(struct EIGRP_NBR *nbr, struct EIGRP_TX_Q_ELEM *elem, uint16 delay);
+```
+
+1. 创建一个EIGRP_TX_Q类型的对象，并将elem待发送的报文添加到该节点下
+
+   ```c
+   tx_q = (struct EIGRP_TX_Q *)eigrp_mem_malloc(sizeof(struct EIGRP_TX_Q), MTYPE_EIGRP_EIGRP_TX_Q);
+   
+   if (NULL == tx_q) {
+       return;
+   }
+   
+   memcpy(&tx_q->q_pkt, elem, sizeof(struct EIGRP_TX_Q_ELEM));
+   EIGRP_INIT_QUE(tx_q);
+   
+   BIT_RESET(tx_q->q_pkt.flags, CONDITIONAL_RCV_BIT);
+   // 添加到向该nbr发送的可靠报文队列中
+   EIGRP_INSQUE(tx_q, nbr->nbr_tx_q.q_back);
+   ```
+
+2. 如果向该nbr发送的可靠报文队列只有一个元素
+
+   ```c
+   if (1 == EIGRP_QUE_NUM(&nbr->nbr_tx_q))
+   {
+       /* calculate the first rto time */
+       if (delay)
+           // 设置向邻居重传的时间间隔
+           nbr->nbr_rto = delay;
+       else
+           nbr->nbr_rto = NEW_RTO(nbr);
+       
+       nbr->nbr_retries = 0;
+   
+       init_time = nbr->nbr_rto;
+       BIT_SET(nbr->nbr_flags, NBRF_WAIT_ACK);
+   
+       /* Commented by Jita.Fu in 2004.5.31
+        * 在因可靠传输而插入的情况下, 不能马上插入端口,这样会导致
+        * 先发送了本次报文, 而队列内未发送部分因序列号小于本次的
+        * 序列号而被抛弃.
+        */
+       if (STARTUP_INIT_RTO == delay || 0 == delay) {
+           // 添加到端口的发送可靠报文队列中，如果队列中只有一个元素，则开启端口的pacing_timer定时器
+           eigrp_insert_intf_pacingq(nbr->intf, &nbr->nbr_tx_q.q_forw->q_pkt);
+       }
+   
+       // 开启重传定时器
+       task_timer_set( \
+           nbr->nbr_rto_timer, \
+           tq_rto_entry, \
+           init_time|TIMER_UNIT_10MSEC, \
+           EIGRP_MAX_SCHEDULE_TIME,\
+           (void *)nbr, EIGRP_TRUE);
+   }
+   ```
+
+
+
+#### eigrp_nbr_delete
+
+> 1. eigrp_manual_summary_report 函数中调用
+
+```c
+void eigrp_nbr_delete(struct EIGRP_INTF *intf,struct EIGRP_NBR *nbr, enum NBRCHANGE_REASON reason);
+```
+
+1. 检查nbr的nbr_flags是否是正被删除状态`NBRF_BEING_DELETE`，若是则直接返回，否则设置为`NBRF_BEING_DELETE`状态。
+
+   ```c
+   if (BIT_TEST(nbr->nbr_flags, NBRF_BEING_DELETE))
+   {
+           /*Fengsb add this debug 2007-05-25*/
+           eigrp_trace(TR_EIGRP_NBRS, \
+               "BEIGRP: Neighbor %s on %s for NBRF_BEING_DELETE, intf:%x.\n",\
+               ip_ntoa(nbr->nbr_addr), \
+               nbr->nbr_if_name, intf);
+           return;
+   }
+   else
+       BIT_SET(nbr->nbr_flags, NBRF_BEING_DELETE);
+   ```
+
+2. 执行dual_nbr_loss
+
+   ```
+   dual_nbr_loss(intf->eigrp, nbr);
+   ```
+
+   ```c
+   /**
+   int dual_nbr_loss(struct EIGRP *eigrp,struct EIGRP_NBR *nbr)
+   {
+   	struct ENTRY_RDB_LIST *rdb_list;
+   
+   	EIGRP_PROCESS_MLOCK;
+   	QUE_LIST(rdb_list, &nbr->nbr_rdb_list)
+   	{
+   		assert(NULL == rdb_list->rdb->summary);
+   		rdb_list->rdb->local_metric.vector.delay = INFINITE_DLY;
+   		rdb_list->rdb->local_metric.composite = INFINITE_METRIC;
+   		dual_rcvupdate(eigrp, &rdb_list->rdb->rdb_entry->route->p, \
+   			rdb_list->rdb, EIGRP_FALSE);
+   	}QUE_LIST_END(rdb_list, &nbr->nbr_rdb_list);
+   	EIGRP_PROCESS_MUNLOCK;
+   
+   	return 0;
+   }
+   */
+   ```
+
+   
+
+3.  如果nbr是邻居发现的，将端口的nbr数量减一，并重新修改端口占用带宽
+
+   ```c
+   if(NBR_DISCOVERED == nbr->nbr_source) {
+       nbr->intf->nbrs--;
+       // 邻居删除时，修改端口带宽占用率
+       eigrp_bw_percent_default(intf->ref_if->if_index);
+   }
+   ```
+
+4. 如果nbr是邻居发现的
+
+   - 如果向该nbr发送的Query队列不为NULL，则
+
+   ```c
+   if (NBR_DISCOVERED == nbr->nbr_source)
+   {
+       /* release the unreply entry  */
+       nbr_unreply_list_list = &nbr->nbr_unreply_list_list;
+       EIGRP_PROCESS_MLOCK;
+       QUE_LIST(nbr_list_list, nbr_unreply_list_list)
+       {
+           // 见下函数操作
+           eigrp_nbr_send_infinite_rdb(nbr, nbr_list_list->entry);
+       }QUE_LIST_END(nbr_list_list, nbr_unreply_list_list);
+       EIGRP_PROCESS_MUNLOCK;
+   
+       /* active the pktize timers */
+       tq_pktize_handler(nbr->intf);
+       
+       /* 如果发给该nbr的intf端口的可靠队列不为NULL */
+       EIGRP_PROCESS_MLOCK;
+       QUE_LIST(tx_q, &nbr->intf->pacing_q)
+       {
+           if (nbr == tx_q->q_pkt.nbr)
+           {
+               eigrp_rx_ack(nbr, tx_q->q_pkt.sequence);
+               EIGRP_RCVQUE(tx_q);
+               eigrp_mem_free(tx_q, MTYPE_EIGRP_EIGRP_TX_Q);
+               continue;
+           }
+           
+           // 若是组播报文
+           if (NULL == tx_q->q_pkt.nbr)
+           {
+               eigrp_rx_ack(nbr, tx_q->q_pkt.sequence);
+           }
+           tq_pacing_handler(nbr->intf);
+       }QUE_LIST_END(tx_q, &nbr->intf->pacing_q);
+       EIGRP_PROCESS_MUNLOCK;
+   
+       /* 删除邻居操作时，认为收到nbr可靠队列中尚未确认的确认包 */
+       EIGRP_PROCESS_MLOCK;
+       QUE_LIST(tx_q, &nbr->nbr_tx_q)
+       {
+           eigrp_rx_ack(nbr, tx_q->q_pkt.sequence);
+       }QUE_LIST_END(tx_q, &nbr->nbr_tx_q);
+       EIGRP_PROCESS_MUNLOCK;
+   
+       /* because we can stop it in hold timer expired */
+       if (nbr->hold_timer)
+       {
+           task_timer_delete(nbr->hold_timer);
+           nbr->hold_timer = NULL;
+       }
+       
+       if (nbr->nbr_rto_timer)
+       {
+           task_timer_delete(nbr->nbr_rto_timer);
+           nbr->nbr_rto_timer = NULL;
+       }
+   } 
+   ```
+
+5. 如果是邻居发现或直连“邻居”，删除邻居，并添加到dead_nbr_list中
+
+   ```c
+   EIGRP_PROCESS_MLOCK;
+   QUE_LIST(nbr_list, &intf->eigrp->nbr_list)
+   {
+       if (nbr == nbr_list->nbr)
+       {
+           /* delete neighbor from interface */
+           EIGRP_RCVQUE(nbr);
+           /* move neighbor from active neighbor list into dead neighbor list  */
+           EIGRP_RCVQUE(nbr_list);
+           EIGRP_INSQUE(nbr_list, intf->eigrp->dead_nbr_list.nbr_back);
+           if (NBR_DISCOVERED == nbr->nbr_source) {
+               EIGRP_RCVQUE(&nbr->ListInGlobal);
+           }
+   
+           break;
+       }
+   }QUE_LIST_END(nbr_list, &intf->eigrp->dead_nbr_list);
+   EIGRP_PROCESS_MUNLOCK;
+   ```
+
+6. 
+
+   ```c
+   rc = EIGRP_QUE_NUM(&intf->eigrp->active_route_list);
+   if(!rc)
+   {		
+       eigrp_nbr_destory(intf->eigrp, nbr);
+   }
+   ```
+
+   
+
+
+
+##### eigrp_nbr_send_infinite_rdb
+
+```c
+int eigrp_nbr_send_infinite_rdb(struct EIGRP_NBR *nbr, struct TOPOLOGY_ENTRY *entry);
+```
+
+1. 遍历entry下的rdbs，找到经过当前nbr的rdb
+
+   ```c
+   rdb = NULL;
+   EIGRP_PROCESS_MLOCK;
+   QUE_LIST(temp_rdb, &entry->rdbs)
+   {
+       if (temp_rdb->nbr == nbr)
+       {
+           rdb = temp_rdb;
+           break;
+       }
+   }QUE_LIST_END(temp_rdb, &entry->rdbs);
+   EIGRP_PROCESS_MUNLOCK;
+   ```
+
+2. 如果没找到该rdb，则新建一个rdb，并插入由该邻居宣告的rdb列表中
+
+   ```c
+   if (!rdb)
+   {
+       rdb_is_new = EIGRP_TRUE;
+       rdb = (struct ENTRY_RDB*)eigrp_mem_malloc(sizeof(struct ENTRY_RDB), MTYPE_EIGRP_ENTRY_RDB);
+       if (NULL == rdb)
+           return EIGRP_FAIL;
+   
+       rdb_list = (struct ENTRY_RDB_LIST*)eigrp_mem_malloc(sizeof(struct ENTRY_RDB_LIST), MTYPE_EIGRP_ENTRY_RDB_LIST);
+       if (NULL == rdb_list)
+       {
+           eigrp_mem_free(rdb, MTYPE_EIGRP_ENTRY_RDB);
+           return EIGRP_FAIL;
+       }
+   
+       EIGRP_SET_ZERO(rdb,sizeof(struct ENTRY_RDB));
+       EIGRP_INIT_QUE(rdb);
+       rdb->nbr = nbr;
+   
+       EIGRP_INIT_QUE(rdb_list);
+       rdb_list->rdb = rdb;
+       
+       // 插入由该邻居宣告的rdb列表中
+       EIGRP_INSQUE(rdb_list, nbr->nbr_rdb_list.rdb_back);
+   }
+   ```
+
+3. 将rdb中nbr的报告和本地计算距离的复合距离置为无穷大，向量距离中的delay延迟也置为无穷大
+
+   ```c
+   rdb->nbr_metric.vector.delay = INFINITE_DLY;
+   rdb->nbr_metric.composite= INFINITE_METRIC;
+   
+   rdb->local_metric.vector.delay = INFINITE_DLY;
+   rdb->local_metric.composite = INFINITE_METRIC;
+   ```
+
+4. 执行 dual_rcvreply(entry->eigrp, &entry->route->p, rdb, rdb_is_new);
+
+
+
+###### dual_rcvreply
+
+> 1. eigrp_nbr_send_infinite_rdb中调用
+
+```c
+/* DUAL receives an reply whose information is stored in the rdb. */
+int dual_rcvreply(struct EIGRP *eigrp,struct prefix *prefix, struct ENTRY_RDB *rdb,int rdb_is_new);
+```
+
+1. 检查rdb是否为NULL
+
+2. 向拓扑表中添加entry，
+
+   ```c
+   assert(rdb);
+   // 如果在拓扑表中根据prefix前缀找到对应的entry，则直接返回；否则，新建一个entry
+   entry = topology_entry_add(eigrp, prefix);
+   ```
+
+3. 如果rdb是新添加的，并且rdb的本地计算距离为无穷大，并且不再
+
+   ```c
+   if (rdb_is_new)
+   {
+       if (INFINITE_METRIC == rdb->local_metric.composite &&
+           (!EIGRP_ELM_IS_IN_QUE(rdb->nbr, &entry->sia_info.unreplied_nbr_list)))
+       {
+           /* it is unnessary to dual this rdb */
+           eigrp_nbr_delete_rdb(rdb);
+           if (rdb->external)
+           {
+               eigrp_mem_free(rdb->external, MTYPE_EIGRP_EXTERNAL_DATA);
+           }
+           eigrp_mem_free(rdb, MTYPE_EIGRP_ENTRY_RDB);
+           if (QUE_EMPTY(&entry->rdbs))
+               topology_entry_delete(eigrp, entry);
+           return EIGRP_FAIL;
+       }
+   }
+   ```
+
+
+
+#### eigrp_nbr_get
+
+```c
+struct EIGRP_NBR* eigrp_nbr_get(struct EIGRP *eigrp, struct EIGRP_INTF *intf, uint32 nbr_addr, uint8 nbr_source);
+```
+
+![image-20250106155646861](./EIGRP_code.assets/image-20250106155646861.png)
+
+1.  检查nbr是否在eigrp的dead_nbr_list中 `nbr_source和nbr_addr`都要一致
+
+   - 如果存在，将nbr_list先从dead_nbr_list中删除，并添加到`eigrp->nbr_list`中
+     - 如果原来的nbr是"直连"邻居，则将nbr_list中的nbr作为头节点添加到intf->nbr链表中
+     - 否则，添加到**intf->nbr**链表尾部，并将`nbr_list->nbr->ListInGlobal`添加到eigrpd->nbr_list全局nbr链表中
+     - 最后，直接返回该nbr节点
+
+   ```c
+   EIGRP_PROCESS_MLOCK;
+   QUE_LIST(nbr_list, &eigrp->dead_nbr_list)
+   {
+       if (nbr_list->nbr->nbr_source == nbr_source && nbr_list->nbr->nbr_addr == nbr_addr)
+       {
+           nbr_list->nbr->nbr_flags = 0;
+   		
+           EIGRP_RCVQUE(nbr_list);
+           // 重新添加到nbr_list链表中
+           EIGRP_INSQUE(nbr_list, eigrp->nbr_list.nbr_back);
+   
+           // "直连"邻居 == 当前接口
+           if (NBR_CONNECTED == nbr_source)
+           {
+               EIGRP_INSQUE(nbr_list->nbr, &intf->nbr);
+           }
+           else
+           {
+               EIGRP_INSQUE(nbr_list->nbr, intf->nbr.nbr_back);
+               EIGRP_INSQUE(&nbr_list->nbr->ListInGlobal, eigrpd->nbr_list.eigrp_back);
+           }
+   
+           nbr_list->nbr->intf = intf;
+           nbr_list->nbr->nbr_flags = 0;
+           EIGRP_PROCESS_MUNLOCK;
+           return nbr_list->nbr;
+       }
+   }QUE_LIST_END(nbr_list->nbr, &eigrp->dead_nbr_list);
+   EIGRP_PROCESS_MUNLOCK;
+   
+   ```
+
+2. 如果存在dead_nbr_list中，则新建一个EIGRP_NBR节点以及EIGRP_NBR_LIST链表节点
+
+   ```c
+   nbr = (struct EIGRP_NBR *)eigrp_mem_malloc(sizeof(struct EIGRP_NBR), MTYPE_EIGRP_EIGRP_NBR);
+   if (NULL == nbr)
+   {
+       return NULL;
+   }
+   
+   EIGRP_SET_ZERO(nbr, sizeof(struct EIGRP_NBR));
+   EIGRP_INIT_QUE(nbr);
+   EIGRP_INIT_QUE(&nbr->ListInGlobal);
+   nbr->nbr_source = nbr_source;
+   nbr->nbr_addr = nbr_addr;
+   nbr->intf = intf;
+   nbr->nbr_if_eterid = intf->ref_if->if_eterid;
+   strcpy(nbr->nbr_if_name, intf->ref_if->if_name);
+   EIGRP_INIT_QUE(&nbr->nbr_rdb_list);
+   
+   nbr_list = (struct EIGRP_NBR_LIST*)eigrp_mem_malloc(sizeof(struct EIGRP_NBR_LIST), MTYPE_EIGRP_EIGRP_NBR_LIST);
+   if (NULL == nbr_list)
+   {
+       eigrp_mem_free(nbr, MTYPE_EIGRP_EIGRP_NBR);
+       return NULL;
+   }
+   else
+   {
+       EIGRP_INIT_QUE(nbr_list);
+       nbr_list->nbr = nbr;
+       EIGRP_INSQUE(nbr_list, eigrp->nbr_list.nbr_back);
+   }
+   ```
+
+3. 如果是“直连”邻居，则将nbr添加到intf->nbr的头节点中，否则，添加到尾部
+
+   ```c
+   /* element insert into queue at head of queue only here */
+   if (NBR_CONNECTED == nbr_source)
+   {
+       EIGRP_INSQUE(nbr, &intf->nbr);
+       EIGRP_INIT_QUE(&nbr->ListInGlobal);
+   }
+   else
+   {
+       assert(NBR_DISCOVERED == nbr_source);
+       EIGRP_INSQUE(nbr, intf->nbr.nbr_back);
+       EIGRP_INSQUE(&nbr->ListInGlobal, eigrpd->nbr_list.eigrp_back);
+   }
+   return nbr;
+   ```
+
+   
 
 
 
 ### 发送可靠报文
 
 #### eigrp_tx_update
+
+```c
+void eigrp_tx_update(struct EIGRP_INTF *intf, struct EIGRP_TX_Q_ELEM *elem);
+```
+
+1. 检查端口是否是passive端口以及邻居数量是否为0
+
+   ```
+   if (intf->ref_if->if_passive || 0 == intf->nbrs)
+       return;
+   ```
+
+2. 根据elem->nbr，检查是否有指定邻居，如果没有，选用组播地址
+
+   ```c
+   if (elem->nbr) {
+       /* unicast to a neighbor */
+       nbr_addr = elem->nbr->nbr_addr;
+       nbr_ack = elem->nbr->nbr_sequence;
+   } else {
+       /* multicast to all neighbors in the interface */
+       if (BIT_TEST(elem->flags, CONDITIONAL_RCV_BIT)) {
+           eigrp_tx_hello(intf, elem->sequence);
+       }
+   
+       /* unicast to a neighbor */
+       nbr_addr = EIGRP_MCAST_ADDR;
+       nbr_ack = 0;
+   }
+   ```
+
+3. 根据elem中的路由条目数，依次根据elem->route[i].p从拓扑表中查找，并进行过滤，
+
+   ```c
+   p = eigrpd->send_buf + EIGRP_HDR_LENGTH;
+   for (i=0; i < elem->routes; i++)
+   {
+       entry = topology_entry_get(intf->eigrp, &(elem->route[i].p));
+       if (entry) {		
+           if (elem->route[i].serno != entry->serno)
+               continue;
+   
+           /* when the entry is active */
+           if (entry->state)
+               continue;
+               
+           /* not send the network intercross with interface  */
+           if ((entry->route->p.u.prefix4.s_addr & intf->ref_if->if_subnet_mask) \
+               == (intf->ref_if->if_ipaddr & intf->ref_if->if_subnet_mask))
+           {
+               continue;
+           }
+       }
+   
+       if (entry) {
+           len = eigrp_append_route_tlv((struct EIGRP_TLV *)p,
+               &(entry->route->p),	entry->route, elem->opcode, intf, elem->startup);
+       } else {
+           len = eigrp_append_route_tlv((struct EIGRP_TLV *)p,
+               &(elem->route[i].p), NULL, elem->opcode, intf, elem->startup);
+       }
+   
+       if (0 != len)
+           p += len;
+   }
+   ```
+
+4. 发送的eigrp Update数+1
+
+   ```c
+   intf->eigrp->traffic.updates.sent++;
+   ```
+
+5. 发送数据包
+
+   ```c
+   eigrp_txpkt((struct EIGRP_HDR*)eigrpd->send_buf, \
+   		intf,\
+   		EIGRP_UPDATE, \
+   		(p - eigrpd->send_buf), \
+   		nbr_addr, \
+   		elem->flags, \
+   		elem->sequence, \
+   		nbr_ack);
+   ```
+
+   ![image-20250106111235226](./EIGRP_code.assets/image-20250106111235226.png)
+
+
 
 #### eigrp_tx_query
 
@@ -1008,6 +1721,26 @@ rc = task_send_packet(eigrpd->eigrp_socket, (void*)pkt, length, flag, &addr_dest
 
 
 ### 定时器任务
+
+```c
+void tq_hello_entry(task_timer *tip)
+{
+	struct rt_msg msg; 
+    int rc; 
+    msg.type = MSG_EIGRP_HELLO_TIMEOUT; 
+    msg.uid = (uint32)tip->task_timer_data; 
+    msg.len = 0; 
+    msg.param = 0; 
+    
+    rc = q_send(eigrpd->hello_queue_id, (ULONG*)&msg); 
+    if(rc) 
+        eigrp_trace(TR_EIGRP_ALL, "send message to eigrp router task error "
+        	"[type: %X, UID: %X, len: %X, PAR: %X]!\n", 
+        	type1, uid1, len1, param1); 
+}
+```
+
+
 
 #### RTO重传定时器
 
@@ -1289,96 +2022,487 @@ void tq_hold_handler(struct EIGRP_NBR *nbr)
 
 
 
-
-
-
-
-
-
-
-
-
-
-### nbr邻居相关处理函数
-
-<img src="./EIGRP_code.assets/image-20250103174408923.png" alt="image-20250103174408923" style="zoom: 50%;" />
-
-#### eigrp_nbr_add
-
-> 当创建”直连“邻居和邻居发现时，调用此函数
+#### Pktize_Timer封包定时器
 
 ```c
-void eigrp_nbr_add(struct EIGRP_INTF *intf, struct EIGRP_NBR *nbr, enum NBRCHANGE_REASON reason);
+// 见eigrp_txpkt.c/eigrp_send_about
+elm = (struct EIGRP_PKTIZE_Q *)eigrp_mem_malloc(sizeof(struct EIGRP_PKTIZE_Q), MTYPE_EIGRP_EIGRP_PKTIZE_Q);
+	if (NULL == elm)
+		return EIGRP_FAIL;
+	
+EIGRP_SET_ZERO(elm, sizeof(struct EIGRP_PKTIZE_Q));
+EIGRP_INIT_QUE(elm);
+elm->q_entry.opcode = opcode;
+elm->q_entry.nbr = nbr; // 组播发送时，nbr为NULL
+memcpy(&(elm->q_entry.p), &(route->p), sizeof(struct prefix));
+
+EIGRP_INSQUE(elm, intf->pktize_q.q_back);
 ```
 
-1. 检查如果nbr是邻居发现的
+##### tq_pktize_entry发送超时消息
 
-   ```c
-   if (NBR_DISCOVERED == nbr->nbr_source)
-   {
-       intf->nbrs++;
-       // 添加一个新邻居时，更新端口的eigrp平均占用带宽
-       // eigrpd->rif[if_index]->if_bw_percent = nbrs <= 2 ? DEFAULT_BW_PERCENT : (100 / nbrs);
-       eigrp_bw_percent_default(intf->ref_if->if_index);
+```c
+void tq_pktize_entry(task_timer *tip)
+{
+    struct rt_msg msg; 
+    int       rc; 
+    msg.type = MSG_EIGRP_PKTIZE_TIMEOUT; 
+    msg.uid = (uint32)tip->task_timer_data; 
+    msg.len = 0; 
+    msg.param = 0; 
+    rc = q_send(eigrpd->router_queue_id, (ULONG*)&msg); 
+    if(rc) 
+        eigrp_trace(TR_EIGRP_ALL, "send message to eigrp router task error "
+        "[type: %X, UID: %X, len: %X, PAR: %X]!\n", 
+        type1, uid1, len1, param1); 
+}
+```
+
+##### tq_pktize_handler超时处理函数
+
+```c
+void tq_pktize_handler(struct EIGRP_INTF *intf);
+```
+
+1. 检查eigrp端口是否开启
+
+   ```C
+   if (EIGRP_FALSE == tq_is_exist_intf(intf)) {
+       return;
    }
    ```
 
-2. 设置邻居nbr的相关字段
+2. 关闭**pktize_timer**封包定时器
 
-   ```
-   time(&nbr->nbr_ctime); // 创建时间
-   time(&nbr->nbr_rtime); // 刷新时间
-   nbr->nbr_sequence = 0; // 最近一次从邻居收到的可靠报文的sequence
-   nbr->nbr_retrans = nbr->nbr_retries = 0; // 向邻居重传的当前次数以及总次数
-   nbr->nbr_srtt = 0;		// 平均往返时间
-   nbr->nbr_last_rto = 0;  // 上一次传输可靠报文的时间间隔
-   nbr->nbr_if_conditional_rcv = 0; // CR模式
-   nbr->nbr_nms = 0;		// 忽略从该邻居的下一个序列号的可靠报文
-   nbr->nbr_flags = NBRF_WAIT_INIT;  // 等待Update Init报文
-   nbr->nbr_rto = NEW_RTO(nbr);	  // 向邻居发送可靠报文的间隔
+   ```CC
+   task_timer_set( \
+       intf->pktize_timer, \
+       tq_pktize_entry, \
+       0, \
+       0, \
+       (void*)intf, \
+       EIGRP_FALSE);
    ```
 
-3. 初始化nbr两个队列
+3. 获取端口的MTU
 
    ```c
-   EIGRP_INIT_QUE(&nbr->nbr_tx_q);
-   EIGRP_INIT_QUE(&nbr->nbr_unreply_list_list);
-   ```
-
-4. 如果邻居是新发现的，创建hold_time定时器(开启)以及RTO重传定时器
-
-   **<font color='red'>构造Update Init报文并发送整个拓扑表信息</font>**
-
-   ```c
-   if (NBR_DISCOVERED == nbr->nbr_source)
+   mtu_len = EIGRP_INTF_MTU(intf->ref_if->if_index);
+   if(mtu_len > EIGRP_MAXPKT)
    {
-       /* create hold timer and rto timer */
-       nbr->hold_timer = task_timer_create(\
-           "EIGRP_HOLD", \
-           tq_hold_entry, \
-           0,\
-           nbr->nbr_hold_time, \
-           nbr->nbr_hold_time,\
-           (void *)nbr, EIGRP_TRUE);
+       syslog(LOG_ERR, "BEIGRP: interface mtu is too small\n");
+       return;
+   }
+   ```
+
+4. 遍历端口的pktize_q封包队列，构造EIGRP_TX_Q包，并添加到临时队列中。
+
+   ```ccc
+   struct EIGRP_TX_Q *temp_tx_q;
+   struct TOPOLOGY_ENTRY *entry;
    
-       nbr->nbr_rto_timer = task_timer_create(\
-           "EIGRP_RTO", \
-           tq_rto_entry, \
-           0,\
-           3000|TIMER_UNIT_10MSEC, \
-           nbr->nbr_rto|TIMER_UNIT_10MSEC,\
-           (void *)nbr, EIGRP_FALSE);
-   	
+   EIGRP_INIT_QUE(&temp_txq);
+   
+   EIGRP_PROCESS_MLOCK;
+   QUE_LIST(pk_q, &intf->pktize_q)
+   {
+       found = EIGRP_FALSE;	/* flags for same packet */
+      	
+       // 先检查EIGRP_TX_Q队列中存在向nbr发送的相同opcode类型的数据包 <= pk_q
+       QUE_LIST(temp_tx_q, &temp_txq)
+       {
+           /* find whether we can insert it into a exist packet */
+           if (temp_tx_q->q_pkt.nbr == pk_q->q_entry.nbr &&
+               temp_tx_q->q_pkt.opcode == pk_q->q_entry.opcode)
+           {
+               // 如果存在，并且pkt中的路由数未达到最大现在，并且未达到最大MTU的限制
+               if (temp_tx_q->q_pkt.routes < PKT_MAXROUTETLV &&
+                   (temp_tx_q->len + TLV_IP_EXT_LEN) < mtu_len)
+               {
+                   found = EIGRP_TRUE;
+                   tx_q = temp_tx_q;
+                   break;
+               }
+           }
+       }QUE_LIST_END(temp_tx_q, &temp_txq);
        
-       eigrp_send_startup(nbr);
-   }
+       // 如果在这里临时队列中未找到相同类型的数据包，则新建一个tx_q，插入到temp_txq队列尾部
+       /* find whether we must create a new packet */
+       if (!found)
+       {
+           tx_q = (struct EIGRP_TX_Q*) \
+               eigrp_mem_malloc(sizeof(struct EIGRP_TX_Q), MTYPE_EIGRP_EIGRP_TX_Q);
+           if (NULL == tx_q) 
+           {
+               EIGRP_RCVQUE(pk_q);
+               eigrp_mem_free(pk_q, MTYPE_EIGRP_EIGRP_PKTIZE_Q);
+               continue;
+           }
+   
+           EIGRP_SET_ZERO(tx_q, sizeof(struct EIGRP_TX_Q));
+           EIGRP_INIT_QUE(tx_q);
+           /* insert the blank packet into queue tail */
+           EIGRP_INSQUE(tx_q, temp_txq.q_back);
+   
+           /* fill the fields except routes/route with pktize element */
+           tx_q->q_pkt.sequence = intf->eigrp->max_sequence++;
+           tx_q->q_pkt.opcode = pk_q->q_entry.opcode;
+           tx_q->q_pkt.nbr = pk_q->q_entry.nbr;
+           tx_q->q_pkt.flags = 0;
+           tx_q->q_pkt.routes = 0;
+           tx_q->len = 0;
+       }
+       
+       entry = topology_entry_get(intf->eigrp, &(pk_q->q_entry.p));
+       
+       /* fill packet with serno and route */
+   	memcpy(&(tx_q->q_pkt.route[tx_q->q_pkt.routes].p), &(pk_q->q_entry.p), sizeof(struct prefix));
+   	tx_q->q_pkt.route[tx_q->q_pkt.routes].serno = entry ? entry->serno:0;
+   	tx_q->q_pkt.routes++;
+       
+       if (entry)
+       {
+           if (entry->successor_rdb)
+           {
+               if (entry->successor_rdb->external)
+                   tx_q->len += TLV_IP_EXT_LEN;
+               else
+                   tx_q->len += TLV_IP_INT_LEN;
+           }
+           else
+               tx_q->len += TLV_IP_INT_LEN;
+       }
+       else
+           tx_q->len += TLV_IP_INT_LEN;
+           
+   	EIGRP_RCVQUE(pk_q);
+   	eigrp_mem_free(pk_q, MTYPE_EIGRP_EIGRP_PKTIZE_Q);
+   }QUE_LIST_END(pk_q, &intf->pktize_q);
+   EIGRP_PROCESS_MUNLOCK;
+   ```
+
+5. 将队列中的数据包添加到nbr的可靠队列以及端口的pacing_q可靠队列中
+
+   ```
+   /* insert each packet into interfaces and neighbors */
+   EIGRP_PROCESS_MLOCK;
+   QUE_LIST(tx_q, &temp_txq)
+   {
+       if (tx_q->q_pkt.nbr)
+       {
+           if (EIGRP_FALSE != tq_is_exist_nbr(tx_q->q_pkt.nbr)) {
+   
+           eigrp_insert_nbr_txq( \
+               tx_q->q_pkt.nbr, \
+               &tx_q->q_pkt, \
+               0/* zero delay */);
+       }
+   
+   
+       }/* [unicast] if (tx_q->q_pkt->nbr) */
+       else
+       {
+           /* foreach(nbr discovered of the eigrp_intf) */
+           QUE_LIST(nbr, &intf->nbr)
+           {
+               if (nbr->nbr_source != NBR_DISCOVERED)
+                   continue;
+   
+               /* NBRF_WAIT_ACK & NBRF_WAIT_INITACK == 6 */
+               if (BIT_TEST(nbr->nbr_flags, NBRF_WAIT_ACK) ||
+                   BIT_TEST(nbr->nbr_flags, NBRF_WAIT_INITACK))
+               {
+               	
+                   BIT_SET(tx_q->q_pkt.flags, CONDITIONAL_RCV_BIT);
+               }
+               else
+               {
+                   BIT_SET(nbr->nbr_flags, NBRF_WAIT_ACK);
+               }
+               tx_q->q_pkt.nbr = nbr;
+               eigrp_insert_nbr_txq( \
+                   nbr, \
+                   &tx_q->q_pkt, \
+                   (uint16)(NEW_RTO(nbr)));
+           }QUE_LIST_END(nbr, &intf->nbr);
+   
+           /* Commented by Jita.Fu in 2004.5.31
+            * 端口的报文插入应该在统计了是否需要有限接收组播形式的可靠报文之后
+            * 否则,因为
+            *		"BIT_SET(tx_q->q_pkt.flags, CONDITIONAL_RCV_BIT);"
+            * 没起作用,有限接收机制不起作用.
+            */
+           if (intf->nbrs > 0) {
+               tx_q->q_pkt.nbr = NULL;	/* recover for the above QUE_LIST */
+               eigrp_insert_intf_pacingq( \
+                   intf, \
+                   &tx_q->q_pkt);
+           }
+       }/* [multicast] else -- if (tx_q->q_pkt->nbr) */
+   
+       /* free a packet memory each time */
+       eigrp_mem_free(tx_q, MTYPE_EIGRP_EIGRP_TX_Q);
+   }QUE_LIST_END(tx_q, &temp_txq);
+   EIGRP_PROCESS_MUNLOCK;
    ```
 
    
 
+#### Clr_Nbr_Timer定时器
+
+```c
+intf->eigrp->clr_nbrs_timer = task_timer_create(
+			"EIGP_NR", \
+			tq_clr_nbrs_entry, \
+			0, \
+			CLR_NBRS_DLY, \    // 10
+			CLR_NBRS_DLY, \
+			(void*)intf->eigrp, \
+			EIGRP_TRUE);
+```
+
+##### tq_clr_nbrs_entry发送超时消息
+
+```c
+void tq_clr_nbrs_entry(task_timer *tip)
+{
+    struct rt_msg msg; 
+    int       rc; 
+    msg.type = MSG_EIGRP_CLR_NBRS_TIMEOUT; 
+    msg.uid = (uint32)tip->task_timer_data; 
+    msg.len = 0; 
+    msg.param = 0; 
+    rc = q_send(eigrpd->router_queue_id, (ULONG*)&msg); 
+    if(rc) 
+        eigrp_trace(TR_EIGRP_ALL, "send message to eigrp router task error "
+        "[type: %X, UID: %X, len: %X, PAR: %X]!\n", 
+        type1, uid1, len1, param1); 
+}
+```
+
+##### tq_clr_nbrs_handler超时处理消息
+
+```c
+/**
+* 删除 清除nbr的定时器
+* 1.将参数强转为struct EIGRP*类型，并检查是否在eigrpd->eigrp_list队列中
+* 2.删除clr_nbrs_timer定时器
+* 3.遍历eigrp的intf_list队列，检查intf的intf_flags标识是否是INTF_NEED_CLR_NBRS，如果不是则跳过处理
+	否则，遍历intf端口的nbr队列，依次删除邻居发现的nbr，并清除INTF_NEED_CLR_NBRS标识。
+*/
+```
+
+1. 强转为
 
 
 
+
+
+
+
+## Dual模块
+
+### dual_rcvupdate
+
+> 此函数功能是将收到的路由更新信息RDB存储到拓扑表中，并基于 **DUAL** 的逻辑对拓扑表进行计算和更新。
+
+```c
+int dual_rcvupdate(struct EIGRP *eigrp, struct prefix *prefix, struct ENTRY_RDB *rdb, int rdb_is_new);
+```
+
+1. 检查`rdb_is_new`新增的rdb的metric->composite复合距离是否为无穷大
+
+   - 如果是，则需要将rdb进行删除；并且如果是外部路由，释放相关的外部数据内存。
+
+     ```c
+     assert(rdb);
+     if (rdb_is_new)  // 若此rdb是新建的
+     {
+         if (INFINITE_METRIC == rdb->local_metric.composite)
+         {
+             // 将新增的rdb从nbr->nbr_rdb_list删除 
+             eigrp_nbr_delete_rdb(rdb);
+             if (rdb->external)
+             {
+                 eigrp_mem_free(rdb->external, MTYPE_EIGRP_EXTERNAL_DATA);
+             }
+             eigrp_mem_free(rdb, MTYPE_EIGRP_ENTRY_RDB);
+             return EIGRP_FAIL;
+         }
+     }
+     ```
+
+2. 根据前缀prefix，查找拓扑表中指定的entry，如果不存在，则新建一个；否则，直接返回、
+
+   ```
+   entry = topology_entry_add(eigrp, prefix);
+   if(!entry)
+       return EIGRP_FAIL;
+   ```
+
+3. 如果rdb是新增的，则将其添加到entry->rdbs
+
+   ```c
+   if (rdb_is_new)
+   {
+       EIGRP_INSQUE(rdb, entry->rdbs.eigrp_back);
+       rdb->rdb_entry = entry;
+   }
+   ```
+
+4. 调用 `dual_rcvupdate_local_compute` 进行本地计算，生成一个事件 ID。根据事件 ID 决定下一步的状态机操作。
+
+   ```c
+   event_id = dual_rcvupdate_local_compute(entry, rdb);
+   ```
+
+   
+
+#### >dual_rcvupdate_local_compute
+
+```c
+static int dual_rcvupdate_local_compute(struct TOPOLOGY_ENTRY *entry, struct ENTRY_RDB *rdb);
+```
+
+1. 如果entry状态为Active，说明该条目正在进行路由计算或收敛，因此不进行任何处理，直接返回 `AU_ANY`。
+
+   ```c
+   if (ENTRY_ACTIVE == entry->state)
+       return AU_ANY; /* Any update input event */
+   ```
+
+2. 初始化 best_rd 
+
+   ```c
+   if (NULL == entry->successor_rdb)
+       best_rd = INFINITE_METRIC;  // 没有继任者路由时，度量值设置为无穷大
+   else
+       best_rd = entry->rd;         // 否则，取当前条目的度量作为最佳度量
+   ```
+
+3. 如果entry中存在经过后继的best_rdb，并且参数rdb不为无穷大且rdb的本地计算度量值比best_rdb的要小，或者说优先级更大
+
+   ```c
+   if (entry->successor_rdb)
+   {
+       // 如果存在经过后继的rdb
+       // --- 若待处理的rdb的本地计算复合距离 != 无穷大  && enrty宣告经过后继的rdb的nbr->source “优先级” < rdb->nbr->nbr_source
+       if ((INFINITE_METRIC != rdb->local_metric.composite && \
+           entry->successor_rdb->nbr->nbr_source < rdb->nbr->nbr_source) || \
+           (best_rd >= rdb->local_metric.composite && entry->successor_rdb->nbr->nbr_source == rdb->nbr->nbr_source))
+   
+           // rdb为本地计算最小的复合距离，选用当前rdb
+           return PU_LE; /* ReceivedUpdate is less or equal than current best route */
+   }
+   else
+   {
+       // 如果当前不存在经过后继的rdb，则返回LE ???
+       return PU_LE;
+   }
+   ```
+
+4. 如果存在多个后继，且当前rdb是经过后继
+
+   ```c
+   // 并且通过当前rdb的本地计算距离被更新为无穷大，则路由不需要进入Active
+   if (entry->successors > 1 && BIT_MATCH(rdb->rdb_flags, RDBF_SUCCESSOR)) {
+       return PU_LE;
+   }
+   ```
+
+5. 如果此rdb不经过后继，返回`PU_HI_FROMNSUC`
+
+   ```C
+   if (!BIT_MATCH(rdb->rdb_flags, RDBF_SUCCESSOR)) 
+       return PU_HI_FROMNSUC;
+   /* Input event other than PU_LE; update is not received from current successor */
+   ```
+
+6. 如果参数是当前唯一的后继
+
+
+
+
+
+## 接收到Routing模块的消息
+
+### 端口address Add事件
+
+```c
+static void eigrp_ifachange(uint32 if_index, uint8 add, uint32 if_ipaddr, uint32 if_subnet_mask,uint32 if_ipaddr_id, uint8 unnumbered);
+```
+
+```c
+eigrp_ifachange(param->data3.ifindex, (uint8)EIGRP_TRUE, \
+        param->data1.dest, \
+        param->data2.mask, \
+        param->data4.data_uint32, \
+        EIGRP_FALSE);
+```
+
+1. 检查端口if_index参数，端口对象是否存在
+
+   ```
+   if (if_index == 0 || if_index > INTERFACE_DEVICE_MAX_NUMBER)
+       return;
+   	
+   if (NULL == eigrpd->rif[if_index])
+       return;
+   ```
+
+2. 根据if_ipaddr_id检查ipaddrlist中对象是否存在
+
+   ```c
+   ifap = ipaddrlist[if_ipaddr_id];
+   if (NULL == ifap)
+       return;
+   ```
+
+3. 如果是地址添加事件
+
+   - 给eigrp_list中的eigrp进程分配一个router-id
+
+   - 设置端口对象字段值
+
+     ```c
+     eigrp_reselect_routerid();
+     
+     /* set ip address, ip mask, and so on */
+     eigrpd->rif[if_index]->if_ipaddr = if_ipaddr;
+     eigrpd->rif[if_index]->if_subnet_mask = if_subnet_mask;
+     eigrpd->rif[if_index]->if_ipaddr_id = 0;
+     eigrpd->rif[if_index]->if_unnumbered = unnumbered;
+     ```
+
+   - 如果端口状态为Linkproto_Up
+
+     - 遍历每个eigrp进程的network_list宣告链表，如果当前端口的地址处于该进程的宣告网段，则端口激活eigrp进程
+
+     ```c
+     if (eigrpd->rif[if_index]->if_linkup)
+     {
+         EIGRP_PROCESS_MLOCK;
+         QUE_LIST(eigrp, &eigrpd->eigrp_list)
+         {
+             QUE_LIST(network_list, &eigrp->network_list)
+             {
+                 if ( network_list->network_number == \
+                 (if_ipaddr&network_list->subnet_mask))
+                 {
+                     // 见network命令执行的eigrp_intf_enable函数
+                     eigrp_intf_enable(eigrpd->rif[if_index], eigrp);
+                     EIGRP_PROCESS_MUNLOCK;
+                     return;
+                 }
+             }QUE_LIST_END(network_list, &eigrp->network_list);
+         }QUE_LIST_END(eigrp, &eigrpd->eigrp_list);
+         EIGRP_PROCESS_MUNLOCK;
+     }
+     ```
+
+     
+
+   
 
 
 
@@ -1590,36 +2714,7 @@ for (i=0;i<MAX_DEVICES;i++)
 
 ##### eigrp_intf_enable函数
 
-###### struct EIGRP_INTF结构体
-
-```c
-/**
- EIGRP_INTF对象存储在REFERENCE_IF->if_eigrp_intf下、当前进程eigrp->intf_list中
- EIGRP_INTF->ListInGlobal存储在全局对象的eigrpd->intf_list中
-*/
-struct EIGRP_INTF
-{
-	struct EIGRP_INTF *intf_forw, *intf_back;
-	tEIGRP_DLL_HDR	ListInGlobal;
-
-	struct REFERENCE_IF *ref_if;	/* Intf对应的REFERENCE IF*/
-	struct EIGRP *eigrp;	/*Intf所属的EIGRP进程*/
-	uint16 intf_flags;	/*Intf的标志位*/
-	uint16 nbrs;				/* Intf上所发现的邻居个数。*/
-
-	struct EIGRP_NBR nbr;	/*Intf上所发现的邻居列表。链表头表示自己。*/
-	task_timer *hello_timer;	/* 周期性发送Hello报文的定时器。*/
-	struct EIGRP_TX_Q pacing_q;	/* 发送可靠报文的队列。链表头不使用。*/
-	time_t pacing_interval;	/* Intf上发送可靠报文的定步间隔。单位：毫秒。 */
-	task_timer *pacing_timer;	/* 可靠报文定步发送的定时器。 */
-	time_t last_reliable_sent;	/* 最近一次可靠报文的发送时间。(时间戳，调用time可获得。可参考bgp_print_time函数实现类似Cisco时间格式的打印) */
-	time_t mean_srtt;	/* Intf上所有邻居平滑回程时间的平均值。单位：毫秒。 */
-	struct EIGRP_PKTIZE_Q pktize_q;	/* 准备封包的队列。链表头不使用。 */
-	task_timer *pktize_timer;	/* Intf上的封包定时器。 */
-	task_timer *metric_change_timer;	/* 延迟处理端口MetricChange的定时器。超时后重新计算来自intf上所有邻居的路由。如果该字段非0，表示已经启动了intf上的MetricChange事件。  */
-	uint32 vrf_id;
-};
-```
+<img src="./EIGRP_code.assets/image-20250106132722900.png" alt="image-20250106132722900" style="zoom: 67%;" />
 
 1. 首先，检查该端口下是否存在eigrp_inft对象，如果有，则直接返回；否则，新建一个eigrp_intf接口对象，并初始化
 
@@ -1653,7 +2748,6 @@ EIGRP_INIT_QUE(&intf->nbr);		  // 初始化该端口发现的邻居
 /*
 * 设置端口发送可靠报文的间隔：
 	(((8*100*mtu)/(10*bw*percent)<1))?1:(8*100*mtu)/(10*bw*percent)
-	
 	if_bw_percent: 保存"ip eigrp bandwidth-per"的配置。端口创建时设置为确省值DEFAULT_BW_PERCENT。*/
 */
 
@@ -1664,9 +2758,9 @@ intf->pacing_interval = EIGRP_PACING_INTERVAL(ref_if->if_metric.mtu, ref_if->if_
 
 ```c
 task_set_option_group(eigrpd->eigrp_socket,
-			     TASKOPTION_GROUP_ADD,
-				 ref_if->if_index,
-				 &eigrpd->eigrp_mcast_addr);
+     TASKOPTION_GROUP_ADD,
+     ref_if->if_index,
+     &eigrpd->eigrp_mcast_addr);
 ```
 
 3. 创建eigrp端口的定时器
@@ -1674,14 +2768,14 @@ task_set_option_group(eigrpd->eigrp_socket,
 ```c
 if (EIGRP_TRUE != ref_if->if_passive && (!rt_get_if_loopback(ref_if->if_index)))
 {
-#define FIRST_HELLO_TIME     ((uint16)(1 + rand()%4))
+#define FIRST_HELLO_TIME ((uint16)(1 + rand()%4))
 	init_time = FIRST_HELLO_TIME;
 	intf->hello_timer = task_timer_create(\
 		"EIGRP_HELLO", \
 		tq_hello_entry, \
-		0,\
+		0, \
 		init_time, \
-		ref_if->if_hello_interval,\
+		ref_if->if_hello_interval, \
 		(void *)intf, TIMERF_ENABLE);
 }
 
@@ -1722,11 +2816,13 @@ EIGRP_PROCESS_MUNLOCK;
 
 ###### eigrp_manual_summary_report函数
 
+> 当端口激活eigrp时执行，即执行函数eigrp_intf_enable。
+
 ```c
 int eigrp_manual_summary_report(struct EIGRP *eigrp, struct EIGRP_INTF *intf, struct prefix *prefix);
 ```
 
-1. 检查端口是否在eigrp进程端口列表中，如果没有直接返回；否则，调用`eigrp_summary_rdb_get`，检查该prefix表示的网络前缀地址是否已被汇总。
+1. 检查端口是否在eigrp进程端口列表中，如果没有直接返回；否则，调用`eigrp_summary_manual_find_rdb`，检查该prefix表示的网络前缀地址是否已被汇总。
 
    -- 如果没有被汇总，则调用`eigrp_summary_rdb_get`	
 
@@ -1753,33 +2849,194 @@ if (!EIGRP_LIST_IS_IN_QUE(intf, &eigrp->intf_list))
 manual_rdb = eigrp_summary_manual_find_rdb(eigrp, prefix);
 if (manual_rdb == NULL)
 {
-    
+    // 如果汇总的rdb不存在于entry->rdbs中，则新建一个rdb
 	manual_rdb = eigrp_summary_rdb_get(eigrp, prefix, &rdb_is_new);
 	if (NULL == manual_rdb)
 		return EIGRP_FAIL;
+    
+    // 新建的 自动汇总的rdb设置为手动汇总
 	manual_rdb->summary->if_automatic = EIGRP_FALSE;
 }
 else
 {
-    ？？？？？？？？？？？？？？？？？
-        ？？？？？？？？？？？？
+	// 如果存在“汇总”邻居的rdb，但是是自动汇总，则返回
 	if (manual_rdb->summary->if_automatic)
 		return EIGRP_FAIL;
 }
 ```
 
+2. 删除本端口从邻居学到的路由信息
+
+   ```c
+   EIGRP_PROCESS_MLOCK;
+   QUE_LIST(nbr, &intf->nbr)
+   {
+       if (NBR_DISCOVERED == nbr->nbr_source)
+           eigrp_nbr_delete(nbr->intf, nbr, SUMMARY_CONFIGURED);
+   }QUE_LIST_END(nbr, &intf->nbr);
+   EIGRP_PROCESS_MUNLOCK;
+   ```
+
+3. 遍历拓扑表，根据本端口汇总生成欲处理的RDB
+
+   ```c
+   node_num = 0;
+   for (rn = route_top(eigrp->topology); rn; rn = route_next(rn))
+   {
+       /* 判断节点是否在手工汇总范围内 */
+       if (prefix->prefixlen < rn->p.prefixlen && \
+           (rn->p.u.prefix4.s_addr&prefix_to_mask(prefix->prefixlen)) \
+           == prefix->u.prefix4.s_addr)
+       {
+           entry = (struct TOPOLOGY_ENTRY *)rn->info;
+           if (NULL == entry)
+               continue;
+   
+           /* 如果本路由是汇总路由，也不需处理 */
+           if (NULL != entry->successor_rdb->summary)
+               continue;
+   
+           /* 将其加入SUMMARY_DATA的子网列表中 */
+           manual_node_list = eigrp_mem_malloc(sizeof(struct ROUTE_NODE_LIST), MTYPE_EIGRP_ROUTE_NODE_LIST);
+           if (NULL == manual_node_list)
+               continue;
+           
+           EIGRP_INIT_QUE(manual_node_list);
+           manual_node_list->route = rn;
+           // summary汇总路由的有关信息
+           // subprefix_list由哪些子网汇总而来的
+           EIGRP_INSQUE(manual_node_list, manual_rdb->summary->subprefix_list.route_back);
+   
+           eigrp_summary_aggregate_add(manual_rdb, rn);
+   
+           /* 计算最优子网 */
+           eigrp_summary_calculate_bestsubprefix(manual_rdb, EIGRP_FALSE);
+   
+           /* 增加端口发送列表 */
+           if (!EIGRP_ELM_IS_IN_QUE(intf, &manual_rdb->summary->subprefix_list))
+           {
+               manual_intf_list = (struct EIGRP_INTF_LIST *)eigrp_mem_malloc\
+                   (sizeof(struct EIGRP_INTF_LIST), MTYPE_EIGRP_EIGRP_INTF_LIST);
+               if (NULL == manual_intf_list)
+                   continue;
+               EIGRP_INIT_QUE(manual_intf_list);
+               manual_intf_list->intf = intf;
+               EIGRP_INSQUE(manual_intf_list, manual_rdb->summary->anchored_intf_list.intf_back);
+   
+           }
+           node_num++;
+       } /* else --  判断节点是否在手工汇总范围内 */
+   }
+   ```
+
+   
 
 
-5. ？？？？
+
+
+
+
+
+
+
+**eigrp_summary_rdb_get**
+
+> eigrp_manual_summary_report 调用
 
 ```c
-eigrp_summary_intf_enable(intf);
-
+static struct ENTRY_RDB *eigrp_summary_rdb_get(struct EIGRP *eigrp, struct prefix *p, uint8 *rdb_is_new);
 ```
 
+1. 根据前缀p从eigrp的拓扑表中查找指定的route_node，如果没有则创建一个；
 
+   ```c
+   node = route_node_get(eigrp->topology, p, NULL);
+   if (NULL == node)
+   {
+       return NULL;
+   }
+   
+   entry = (struct TOPOLOGY_ENTRY *)node->info;
+   if (entry)
+   {
+       route_unlock_node(node);
+       EIGRP_PROCESS_MLOCK;
+       QUE_LIST(rdb, &entry->rdbs)
+       {
+           // 如果rdb经过的邻居是“汇总”邻居
+           // rdb->summary ??? 
+           if (rdb->nbr->nbr_source == NBR_SUMMARY)
+           {
+               sum_rdb = rdb;
+               *rdb_is_new = EIGRP_FALSE;
+               break;
+           }
+       }QUE_LIST_END(rdb, &entry->rdbs);
+       EIGRP_PROCESS_MUNLOCK;
+   }
+   ```
 
-6.  执行`eigrp_connected_report`
+2. 如果entry为NULL
+
+   ```c
+   /* struct ENTRY_RDB *rdb, *sum_rdb; */
+   f (sum_rdb == NULL)
+   {
+       sum_rdb = eigrp_mem_malloc(sizeof(struct ENTRY_RDB), MTYPE_EIGRP_ENTRY_RDB);
+       if (sum_rdb == NULL)
+       {
+           return NULL;
+       }
+       memset(sum_rdb, 0, sizeof(struct ENTRY_RDB));
+       EIGRP_INIT_QUE(sum_rdb);
+       *rdb_is_new = EIGRP_TRUE;
+   
+       rdb_list = eigrp_mem_malloc(sizeof(struct ENTRY_RDB_LIST), MTYPE_EIGRP_ENTRY_RDB_LIST);
+       if (NULL == rdb_list)
+       {
+           eigrp_mem_free(sum_rdb, MTYPE_EIGRP_ENTRY_RDB);
+           return NULL;
+       }
+       else
+       {
+           EIGRP_INIT_QUE(rdb_list);
+           rdb_list->rdb = sum_rdb;
+           
+           // 当端口添加了地址，并且处于配置的summary-address中，将rdb_list添加到eigrp->summary.nbr_rdb_list
+           // nbr_rdb_list表示由该“汇总”邻居宣告的RDB
+           EIGRP_INSQUE(rdb_list, eigrp->summary.nbr_rdb_list.rdb_back);
+           // 该汇总rdb记录经过的邻居路径为eigrp进程的汇总nbr首地址？？
+           sum_rdb->nbr = &eigrp->summary;
+       }
+   }
+   ```
+
+   3. 如果sum_rdb->summary为NULL ` 如果nbr是summary，则指向汇总信息；否则为0。**`
+
+      ```c
+      if (sum_rdb->summary == NULL)
+      {
+          summary_data = eigrp_mem_malloc(sizeof(struct SUMMARY_DATA), MTYPE_EIGRP_SUMMARY_DATA);
+          if (summary_data == NULL)
+          {
+              eigrp_mem_free(sum_rdb, MTYPE_EIGRP_ENTRY_RDB);
+              return NULL;
+          }
+          else
+          {
+              memset(summary_data, 0, sizeof(struct SUMMARY_DATA));
+              EIGRP_INIT_QUE(&summary_data->subprefix_list);
+              EIGRP_INIT_QUE(&summary_data->anchored_intf_list);
+              summary_data->if_automatic = EIGRP_TRUE;
+              sum_rdb->summary = 	summary_data;
+              sum_rdb->distance = SUMMARY_DISTANCE; // 5
+          }
+      } 
+      ```
+
+      <img src="./EIGRP_code.assets/image-20250106142148861.png" alt="image-20250106142148861" style="zoom: 80%;" />
+
+​		
 
 ###### eigrp_connected_report函数
 
@@ -1788,35 +3045,176 @@ eigrp_connected_report(intf);
 // int eigrp_connected_report(struct EIGRP_INTF *intf)
 ```
 
-​	6.1 检查eigrp端口状态是否是`INTF_BEING_DELETE`，如果不是，则需要调用`eigrp_nbr_get`创建一个新的**直连**邻居。
+1. 检查eigrp端口状态是否是`INTF_BEING_DELETE`，如果不是，则需要调用`eigrp_nbr_get`获取/新建一个直连**</font>邻居
+
+   ```c
+   /**
+   	针对于NBR_CONNECTED的邻居
+   		此函数首先会从eigrp->dead_nbr_list中查询（addr、NBR_CONNECTED）,如果找到，则将其从dead_nbr_list中移除，并添加到eigrp->nbr_list中；并添加为端口intf的nbr链表的头节点（而通过NBR_DISCOVERED邻居发现的节点，是插入intf->nbr.back）。
+   	否则，如果没有找到，则新建一个EIGRP_NBR邻居节点以及EIGRP_NBR_LIST链表节点：
+   */
+   nbr = eigrp_nbr_get(intf->eigrp, intf, intf->ref_if->if_ipaddr, NBR_CONNECTED);
+   ```
+
+2. 执行`eigrp_nbr_add`，初始化**直连**nbr的相关字段信息
+
+   ```c
+   /* set times */
+   time(&nbr->nbr_ctime);
+   time(&nbr->nbr_rtime);
+   nbr->nbr_sequence = 0;
+   nbr->nbr_retrans = nbr->nbr_retries = 0;
+   nbr->nbr_srtt = 0;
+   nbr->nbr_last_rto = 0;
+   nbr->nbr_if_conditional_rcv = 0;
+   nbr->nbr_nms = 0;
+   nbr->nbr_flags = NBRF_WAIT_INIT;
+   nbr->nbr_rto = NEW_RTO(nbr);
+   
+   EIGRP_INIT_QUE(&nbr->nbr_tx_q);
+   
+   /* 2002.12.9 FuJintang
+    * move to eigrp_nbr_get
+    * FOR: when the nbr is get from dead nbrs list, and its rdbs exist
+   EIGRP_INIT_QUE(&nbr->nbr_rdb_list); */
+   EIGRP_INIT_QUE(&nbr->nbr_unreply_list_list);
+   ```
+
+3. 执行`eigrp_connected_rdb_lookup`，查询该“直连”邻居宣告的RDB
+
+   - 如果未找到，则新建一个`ENTRY_RDB`、`ENTRY_RDB_LIST`
+
+   ```c
+   rdb = eigrp_connected_rdb_lookup(intf);
+   if (NULL == rdb)
+   {
+       rdb_is_new = EIGRP_TRUE;
+       rdb = (struct ENTRY_RDB *)eigrp_mem_malloc(sizeof(struct ENTRY_RDB), MTYPE_EIGRP_ENTRY_RDB);
+       if (NULL == rdb)
+           return EIGRP_FAIL;
+       
+       rdb_list = (struct ENTRY_RDB_LIST *)eigrp_mem_malloc(sizeof(struct ENTRY_RDB_LIST), MTYPE_EIGRP_ENTRY_RDB_LIST);
+       if (NULL == rdb_list)
+       {
+           eigrp_mem_free(rdb, MTYPE_EIGRP_ENTRY_RDB_LIST);
+           return EIGRP_FAIL;
+       }
+       
+   	EIGRP_SET_ZERO(rdb, sizeof(struct ENTRY_RDB));
+       EIGRP_INIT_QUE(rdb);
+       rdb->nbr = intf->nbr.nbr_forw;
+       EIGRP_INIT_QUE(rdb_list);
+       rdb_list->rdb = rdb;
+       
+       // 将rdb_list添加到该nbr宣告的nbr_rdb_list中
+       EIGRP_INSQUE(rdb_list, intf->nbr.nbr_forw->nbr_rdb_list.rdb_back);
+   }
+   ```
+
+   - 接着，如果找到，或者已经创建成功了，则继续初始化设置rdb的本地计算向量距离
+
+     ```c
+     rdb->local_metric.vector.delay = intf->ref_if->if_metric.delay;
+     rdb->local_metric.vector.reliability = intf->ref_if->if_metric.reliability;
+     rdb->local_metric.vector.load = intf->ref_if->if_metric.load;
+     rdb->local_metric.vector.mtu = intf->ref_if->if_metric.mtu;
+     rdb->local_metric.vector.bandwidth = intf->ref_if->if_metric.bandwidth;
+     ```
+
+   - 通过公式进行rdb的本地计算得到复合距离
+
+     ```c
+     if (INFINITE_DLY == rdb->local_metric.vector.delay)
+         rdb->local_metric.composite = INFINITE_METRIC;
+     else
+         /* eigrp_calculate_composite_metric(metric,eigrp) */
+         CALCULATE_COMPOSITE_METRIC(&rdb->local_metric, intf->eigrp);
+     ```
+
+   - 进行DUAL Update更新
+
+     ```c
+     p.family = AF_INET;
+     p.safi = SAFI_UNICAST;
+     p.prefixlen = (unsigned char)mask_to_prefix(intf->ref_if->if_subnet_mask);
+     p.u.prefix4.s_addr = intf->ref_if->if_ipaddr&intf->ref_if->if_subnet_mask;
+     
+     dual_rcvupdate(intf->eigrp, &p, rdb, rdb_is_new);
+     ```
+
+     
+
+
+
+###### >eigrp_connected_rdb_lookup
+
+> 查询该“直连”邻居宣告的RDB路由信息块
 
 ```c
-/**
-	针对于NBR_CONNECTED的邻居
-		此函数首先会从eigrp->dead_nbr_list中查询（addr、NBR_CONNECTED）,如果找到，则将其从dead_nbr_list中移除，并添加到eigrp->nbr_list中；并添加为端口intf的nbr链表的头节点（而通过NBR_DISCOVERED邻居发现的节点，是插入intf->nbr.back）。
-	否则，如果没有找到，则新建一个EIGRP_NBR邻居节点以及EIGRP_NBR_LIST链表节点：
-		EIGRP_INIT_QUE(nbr_list);
-		nbr_list->nbr = nbr;
-		EIGRP_INSQUE(nbr_list, eigrp->nbr_list.nbr_back);添加到eigrp的nbr_list链表下
-		
-		EIGRP_SET_ZERO(nbr, sizeof(struct EIGRP_NBR));
-		EIGRP_INIT_QUE(nbr);
-		EIGRP_INIT_QUE(&nbr->ListInGlobal);
-		EIGRP_INIT_QUE(&nbr->nbr_rdb_list);
-
-		nbr->nbr_source = nbr_source;
-		nbr->nbr_addr = nbr_addr;
-		nbr->intf = intf;
-		nbr->nbr_if_eterid = intf->ref_if->if_eterid;
-		strcpy(nbr->nbr_if_name, intf->ref_if->if_name);
-		
-		// 添加到端口inft的nbr链表下
-		EIGRP_INSQUE(nbr, &intf->nbr);  
-		
-		//（而通过邻居发现的节点，是插入intf->nbr.back：即 EIGRP_INSQUE(nbr, intf->nbr.nbr_back);）
-*/
-nbr = eigrp_nbr_get(intf->eigrp, intf, intf->ref_if->if_ipaddr, NBR_CONNECTED);
+struct ENTRY_RDB *eigrp_connected_rdb_lookup(struct EIGRP_INTF *intf);
 ```
+
+1.  检查端口对象的nbr是否为NULL
+
+2. 获取直连邻居nbr
+
+   ```c
+   if (QUE_EMPTY(&intf->nbr))
+       return NULL;
+   nbr = intf->nbr.nbr_forw;
+   assert(NBR_CONNECTED == nbr->nbr_source);
+   ```
+
+3. 遍历该nbr宣告的nbr_rdb_list，找出与当前端口掩码一样的rdb
+
+   ```c
+   EIGRP_PROCESS_MLOCK;
+   QUE_LIST(rdb_list, &nbr->nbr_rdb_list)
+   {
+       /* 因为仅仅只更改端口掩码，会造成直连邻居存在不止一个RDB */
+       if (rdb_list->rdb->rdb_entry->route->p.prefixlen \
+           == mask_to_prefix(intf->ref_if->if_subnet_mask)) {
+           EIGRP_PROCESS_MUNLOCK;
+           return rdb_list->rdb;
+       }
+   }QUE_LIST_END(rdb_list, &nbr->nbr_rdb_list);
+   EIGRP_PROCESS_MUNLOCK;
+   ```
+
+
+
+###### >eigrp_calculate_composite_metric
+
+> 根据rdb中的本地计算的向量距离，计算得到本地计算的复合距离
+
+```c
+uint32 eigrp_calculate_composite_metric(struct METRIC_PAIR *metric, struct EIGRP *eigrp);
+```
+
+- 检查metric->vector的delay是否为无穷大，如果是直接返回无穷大
+
+  ```c
+  if(INFINITE_DLY == metric->vector.delay)
+      return INFINITE_METRIC;
+  ```
+
+- 如果不是则通过公式进行计算
+
+  ```c
+  composite_metric = eigrp->metric_weight.k1 * metric->vector.bandwidth + \
+  		eigrp->metric_weight.k2*metric->vector.bandwidth/(256-metric->vector.load) + \
+  		eigrp->metric_weight.k3*metric->vector.delay;
+  
+  if(0 != eigrp->metric_weight.k5)
+  {
+      composite_metric = composite_metric * ((eigrp->metric_weight.k5*256) / (metric->vector.reliability + eigrp->metric_weight.k4));
+  }
+  
+  metric->composite = composite_metric;
+  return composite_metric;
+  ```
+
+###### 
 
 
 

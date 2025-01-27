@@ -17,7 +17,7 @@
 
 - 高级距离矢量路由协议
 - 快速收敛
-- 支持VLSM（可变子网）和不连续子网CIDR（超网）
+- 支持VLSM（可变子网）和*无类别域间路由*CIDR（超网）
 - 部分更新，带宽占用少
 - 多播和单播，而不是广播地址
 - 支持多种网络层协议
@@ -397,6 +397,8 @@ COMMUNITY_TYPE	0x0104
 
 <img src="./EIGRP.assets/image-20241226150647634.png" alt="image-20241226150647634" style="zoom:67%;" />
 
+
+
 **2. 外部类型**
 
 ​	此信息包含创建路由的路由协议的标识、外部度量、AS 编号、是否应将其标记为 EIGRP AS 一部分的指示符以及用于在 EIGRP 进行路由过滤的网络管理员标记 AS 边界。
@@ -549,7 +551,7 @@ COMMUNITY_TYPE		0x0404
 
 对邻居Query数据包的回复，也需要邻居回复确认。
 
-> 响应Query或SIA-Query包
+> 
 
 #### 4.1 SIA-Query包
 
@@ -587,7 +589,7 @@ COMMUNITY_TYPE		0x0404
 >
 > Interface：用于与该邻居通信的本地端口
 >
-> Hold：距收到上次邻居的 EIGRP 数据包以来，邻居还能维持多少时间（通常为 3 倍的 hello 时间）。
+> Hold：指路由器在没有接收到邻居的 Hello 报文时，等待邻居响应的最大时间间隔（以秒为单位）。。
 >
 > Uptime：自与该邻居建立 EIGRP 邻居关系以来的时间
 >
@@ -805,11 +807,46 @@ EIGRP要求建立邻居关系的两台路由器，下列参数需要匹配：
 
 
 
+### 分发默认路由
+
+- 重分布静态路由：创建一条0.0.0.0/32 的默认路由，在Eigrp进程下重分发静态路由 (D*EX)
+- 在接口下进行手动汇总：ip eigrp summary-address 0.0.0.0 0.0.0.0  (D*)
+- ip default-network（D*）不是0.0.0.0 -- 14.0.0.0/8
+  - 非主类IP地址默认路由下发
+    - ip route 0.0.0.0 0.0.0.0 14.1.1.4
+    - ip route 14.0.0.0 255.255.255.0 null 0
+    - network 14.0.0.0
+    - ip default- network14.0.0.0
+
+### 等价与非等价负载均衡
+
+等价负载均衡：最多16条，默认4条。
+
+
+
+### Stub
+
+```c
+eigrp stub receive-only|connected|static|summary|redistributed
+```
+
+- receive-only：阻止stub路由器通告任何类型路由
+- connected：允许stub路由器通告直连路由（该直连路由必须参与到EIGRP中或重分发到EIGRP中）
+- static：允许stub路由器通告静态路由（必须将静态路由重分发到EIGRP中）
+- summary：允许stub路由器通告汇总路由
+- redistributed：允许stub发送重分发路由
+
+默认情况为connected和summary
+
+
+
 ## 如何实现快速收敛？
 
 ​	当S不再可用时，EIGRP搜索自己的拓扑表，如果有另一个FS，则不经过任何计算，直接通过另一个FS转发数据，同时该FS也就成为了S。如果FS全挂了，R1会发送请求给R4，如果R4有去往2.0网段路由，则直接发送给R1，并使用R4作为S。
 
 
+
+## 
 
 ## 差异变量命令（variance）
 
@@ -823,6 +860,34 @@ Variance定义了一个倍数因子，用来表示**一条路由的度量值**�
 
 ```
 variance 5
+```
+
+```
+void eigrp_topology_update_node_flags(struct eigrp *eigrp,
+				      struct eigrp_prefix_descriptor *dest) // 路由前缀描述符
+{
+	struct listnode *node;
+	struct eigrp_route_descriptor *entry;
+
+	for (ALL_LIST_ELEMENTS_RO(dest->entries, node, entry)) {
+		if (entry->reported_distance < dest->fdistance) {
+			// is feasible successor, can be successor
+			if (((uint64_t)entry->distance <= (uint64_t)dest->distance * (uint64_t)eigrp->variance)
+			    && entry->distance != EIGRP_MAX_METRIC) {
+				// is successor
+				entry->flags |= EIGRP_ROUTE_DESCRIPTOR_SUCCESSOR_FLAG;
+				entry->flags &= ~EIGRP_ROUTE_DESCRIPTOR_FSUCCESSOR_FLAG;
+			} else {
+				// is feasible successor only
+				entry->flags |= EIGRP_ROUTE_DESCRIPTOR_FSUCCESSOR_FLAG;
+				entry->flags &= ~EIGRP_ROUTE_DESCRIPTOR_SUCCESSOR_FLAG;
+			}
+		} else {
+			entry->flags &= ~EIGRP_ROUTE_DESCRIPTOR_FSUCCESSOR_FLAG;
+			entry->flags &= ~EIGRP_ROUTE_DESCRIPTOR_SUCCESSOR_FLAG;
+		}
+	}
+}
 ```
 
 
@@ -874,7 +939,9 @@ variance 5
 
 #### 4.1 重新评估一条路由的FS
 
-一旦产生**输入事件时，**路由器就会重新评估一条路由的FS路由器的列表。输入事件如下：
+一旦产生**输入事件时，**路由器就会重新评估一条路由的FS路由器的列表。
+
+输入事件如下：
 
 1. 直连链路的代价发生变化
 2. 直连链路的状态（up或down）发生变化
@@ -888,7 +955,7 @@ variance 5
 
    - 如果拥有最低的度量距离的FS和已经存在的S不同，那么FS将变成S；
      - 如果新的度量距离小于FD，则更新FD
-     - 如果新的度量距离和已经存在的度量距离不同，那么将向所有邻居发送更新。
+     - 如果新的度量距离和已经存在的度量距离不同，那么将向所有邻居发送更新。 `不更新FD`
 
 2. 当路由器执行一个本地计算时，路由依然保持被动状态。
 
@@ -907,7 +974,7 @@ variance 5
 
 
 
-#### 4.1 DUAL有限状态机 FSW
+#### 4.1 DUAL有限状态机 FSM
 
 <img src="./EIGRP.assets/image-20241220170444158.png" alt="image-20241220170444158" style="zoom: 67%;" />
 
@@ -955,6 +1022,10 @@ variance 5
 
 - 如果当前的 **S 不受此变化影响** 或者 **此路由不再可达，但有FS 作为备用，路由保持在 **PASSIVE 状态**。如果有度量值变化，路由器会更新信息并发送 **UPDATE 给邻居。 **<font color='red'>保持Passive状态</font>**
 
+  > Passive状态下，如果收到的rd值小于fd值的Update，则会更新fd和发送的rd值
+  >
+  > ​			     如果收到的rd值大于fd值的Update，若是S发送的，寻找FS；若是非S发送的，则无影响
+
 **(4)** 直连链路 down 或其 cost 增加，或者已收到**metric**增加的<font color='red'>**Update**</font>。 
 
 - 如果没有找到FS，到目的地的路由将进入ACTIVE状态。Query将发送到所有接口上的所有邻居。**<font color='red'>Passive = > Active (O = 1)</font>**
@@ -990,8 +1061,8 @@ variance 5
 
 **(9)和(10)** 如果路由处于 **ACTIVE 状态**，并且与其S之间**发生链路故障**或**成本增加**，则路由器会将此情况视为已收到来自其S的 **REPLY**。 
 
-- (9)：当路由器发起 QUERY 后（QUERY origin flag 为1）发生这种情况时，它会设置 QUERY origin flag = 0，以指示在 ACTIVE 状态下发生了另一个拓扑更改。
-- (10)：当转发 S发起的 QUERY 后（QUERY origin flag 为3）发生这种情况时，它会设置 QUERY origin flag = 2，以指示在 ACTIVE 状态下发生了另一个拓扑更改。
+- (9)：当路由器发起 QUERY 后（QUERY origin flag 为1）发生上述这种情况时，即收到来自Update包，它会设置 QUERY origin flag = 0，以指示在 ACTIVE 状态下发生了另一个拓扑更改。
+- (10)：当转发 S发起的 QUERY 后（QUERY origin flag 为3）发生这种情况时，它会设 置 QUERY origin flag = 2，以指示在 ACTIVE 状态下发生了另一个拓扑更改。
 
 
 
@@ -1078,7 +1149,7 @@ int interface e0/0
 
 Formula with default K values (带宽K1 = 1, 负载K2 = 0, 延迟K3 = 1, 可靠性K4 = 0, MTUK5 = 0): 
 	Metric = [K1 * BW + ((K2 * BW) / (256 – load)) + K3 * delay]
-        
+      
 K6：宽泛指标 用来反映更高的聚合指标。抖动和能量。
     抖动：最长和最短数据包传输之间的间隔 us
     
@@ -1195,3 +1266,28 @@ debug ip eigrp
 1、network后面的网段所在范围的端口开启EIGRP进程；
 
 2、该端口所在直连网段路由放进EIGRP的拓扑表中。
+
+
+
+```c
+cisco如果开启了自动汇总，执行no network时，如果有多条路由都在这个“自然”网段中，则会发送Query，查询这多条不可达路由
+如果关闭了自动汇总，就不会发送汇总的路由了。
+    
+auto-summary: no network 34.0.0.0 
+    => Query（34.0.0.0/8学习到的，可能是汇总路由，34.34.0.0/16直连路由）
+    
+no auto-summary: no network 34.0.0.0
+    => Query（34.34.0.0/16直连路由）
+```
+
+
+
+### Passive-interface
+
+一个用途就是防止将Hello报文发送到不属于他们的链路上，不产生邻接关系。
+
+另一个用途就是防止将从该邻居学到的路由又发送回去。
+
+
+
+## 
